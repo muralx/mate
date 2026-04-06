@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <style>
+      .block { fill: #4A9E6B; }
+      .block-dark { fill: #357A50; }
+      .block-light { fill: #6BBF8A; }
+      .block-accent { fill: #2D5E3E; }
+      .bombilla { fill: #B8860B; }
+      .bombilla-dark { fill: #8B6508; }
+    </style>
+  </defs>
+
+  <!-- Bombilla (straw) - slightly angled -->
+  <!-- Shaft -->
+  <rect class="bombilla" x="150" y="24" width="5" height="88" rx="2"
+        transform="rotate(10, 152, 68)"/>
+  <!-- Filter bulb at bottom (small rounded strainer shape) -->
+  <ellipse class="bombilla-dark" cx="142" cy="114" rx="8" ry="5"/>
+  <line x1="136" y1="114" x2="148" y2="114" stroke="#B8860B" stroke-width="1" opacity="0.5"/>
+  <line x1="137" y1="112" x2="147" y2="112" stroke="#B8860B" stroke-width="0.5" opacity="0.4"/>
+  <line x1="137" y1="116" x2="147" y2="116" stroke="#B8860B" stroke-width="0.5" opacity="0.4"/>
+
+  <!-- === Gourd made of blocks (centered & symmetric) === -->
+
+  <!-- Top rim row -->
+  <rect class="block-accent" x="56" y="76" width="44" height="14" rx="2"/>
+  <rect class="block-accent" x="104" y="76" width="36" height="14" rx="2"/>
+  <rect class="block-accent" x="144" y="76" width="44" height="14" rx="2"/>
+
+  <!-- Row 2 - wide -->
+  <rect class="block" x="46" y="94" width="40" height="20" rx="2"/>
+  <rect class="block-light" x="90" y="94" width="52" height="20" rx="2"/>
+  <rect class="block-dark" x="146" y="94" width="52" height="20" rx="2"/>
+
+  <!-- Row 3 - widest -->
+  <rect class="block-dark" x="40" y="118" width="52" height="24" rx="2"/>
+  <rect class="block-light" x="96" y="118" width="40" height="24" rx="2"/>
+  <rect class="block" x="140" y="118" width="60" height="24" rx="2"/>
+
+  <!-- Row 4 - still wide -->
+  <rect class="block-light" x="44" y="146" width="46" height="20" rx="2"/>
+  <rect class="block" x="94" y="146" width="48" height="20" rx="2"/>
+  <rect class="block-dark" x="146" y="146" width="46" height="20" rx="2"/>
+
+  <!-- Row 5 - tapering -->
+  <rect class="block" x="52" y="170" width="44" height="18" rx="2"/>
+  <rect class="block-dark" x="100" y="170" width="36" height="18" rx="2"/>
+  <rect class="block-light" x="140" y="170" width="44" height="18" rx="2"/>
+
+  <!-- Row 6 - narrower -->
+  <rect class="block-dark" x="62" y="192" width="36" height="16" rx="2"/>
+  <rect class="block-light" x="102" y="192" width="32" height="16" rx="2"/>
+  <rect class="block" x="138" y="192" width="36" height="16" rx="2"/>
+
+  <!-- Row 7 - narrow -->
+  <rect class="block-light" x="74" y="212" width="38" height="14" rx="2"/>
+  <rect class="block" x="116" y="212" width="38" height="14" rx="2"/>
+
+  <!-- Bottom base -->
+  <rect class="block-accent" x="86" y="230" width="56" height="10" rx="3"/>
+</svg>

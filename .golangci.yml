@@ -1,0 +1,28 @@
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - revive
+    - gofmt
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - "checkPrivateReceivers"
+      - name: blank-imports
+      - name: context-as-argument
+      - name: error-return
+      - name: increment-decrement
+      - name: var-declaration
+      - name: range
+
+issues:
+  exclude-dirs:
+    - tabdemo
+    - uidemo

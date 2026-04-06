@@ -1,0 +1,13 @@
+# Development docs (internal planning, specs, reviews)
+dev-docs/
+
+# Claude Code settings
+.claude/
+
+# Binaries
+uidemo/uidemo
+tabdemo/tabdemo
+
+# Coverage output
+coverage.out
+*.out
