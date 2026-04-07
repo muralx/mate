@@ -10,23 +10,10 @@ p := tea.NewProgram(model{}, tea.WithMouseAllMotion())
 
 ## Mouse Event Flow
 
-When a mouse event arrives at your window's `Update()`, delegate to `BaseWindow.HandleMouse()`:
-
-```go
-func (w *MyWindow) Update(msg tea.Msg, fm *input.FocusManager) (tea.Cmd, *window.Result) {
-    switch msg := msg.(type) {
-    case tea.MouseMsg:
-        cmd, _ := w.HandleMouse(msg, fm)
-        return cmd, nil
-    }
-    return nil, nil
-}
-```
-
-The flow inside `HandleMouse`:
+The framework handles mouse routing automatically inside `BaseWindow`. The flow is:
 
 ```
-Mouse event arrives at BaseWindow.HandleMouse(msg, fm):
+Mouse event arrives at BaseWindow (internal):
 
 1. HitTest: find the leaf at (X, Y)
    -> FocusManager walks all focusable+active leaves
@@ -104,7 +91,7 @@ Each component handles clicks differently:
 | Toggle | Toggles on/off, fires OnChange |
 | CheckboxList | Toggles the clicked item (uses Y coordinate to determine which item) |
 | TextInput | Focus only (no specific click action) |
-| TabBar | Activates the clicked tab, fires OnChange |
+| TabComponent (tab bar) | Activates the clicked tab, switches content |
 | Table | Moves cursor to the clicked row (accounts for header and scroll offset) |
 
 ## MouseScrollEvent

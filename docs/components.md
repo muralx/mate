@@ -26,7 +26,7 @@ func NewButton(id, label string, styles ButtonStyles) *Button
 | Method | Description |
 |--------|-------------|
 | `OnPress(fn func() tea.Cmd)` | Set the callback for button press |
-| `BindDefaultActionToKey(binding key.Binding)` | Bind a global shortcut that triggers OnPress |
+| `BindDefaultActionToKey(keys string, description ...string)` | Bind a global shortcut that triggers OnPress |
 
 ### Styles
 
@@ -51,10 +51,7 @@ Built-in styles: `DefaultButtonStyles()`, `DefaultPopupButtonStyles()` (dimmer, 
 Bind a global key that triggers the button's action from anywhere:
 
 ```go
-btn.BindDefaultActionToKey(key.NewBinding(
-    key.WithKeys("ctrl+s"),
-    key.WithHelp("ctrl+s", "Save"),
-))
+btn.BindDefaultActionToKey("ctrl+s", "Save")
 ```
 
 When Ctrl+S is pressed anywhere in the window, the button receives focus and its OnPress fires.
@@ -191,7 +188,7 @@ func NewToggle(id, label string, initial bool, mode ToggleMode, styles ToggleSty
 | `OnChange(fn func(bool) tea.Cmd)` | Callback when state changes |
 | `On() bool` | Get current state |
 | `SetOn(v bool)` | Set state programmatically |
-| `BindDefaultActionToKey(binding key.Binding)` | Global shortcut that toggles state |
+| `BindDefaultActionToKey(keys string, description ...string)` | Global shortcut that toggles state |
 
 ### Keyboard
 
@@ -258,7 +255,7 @@ type CheckboxItem struct {
 | `Items() []CheckboxItem` | Get all items with current state |
 | `Cursor() int` | Get cursor position |
 | `Selected() []string` | Get values of all checked items |
-| `BindDefaultActionToKey(binding key.Binding)` | Global shortcut to toggle cursor item |
+| `BindDefaultActionToKey(keys string, description ...string)` | Global shortcut to toggle cursor item |
 
 ### Keyboard
 
@@ -273,69 +270,6 @@ type CheckboxItem struct {
 Clicking on an item moves the cursor to it and toggles its checked state. The click Y coordinate is used to determine which item was clicked.
 
 ---
-
-## TabBar
-
-A horizontal tab selector with distinct cursor and active states.
-
-```go
-tabs := widget.NewTabBar("tabs", []string{"Overview", "Settings", "About"}, widget.DefaultTabBarStyles())
-tabs.OnChange(func(index int) tea.Cmd {
-    return switchTab(index)
-})
-```
-
-### Constructor
-
-```go
-func NewTabBar(id string, labels []string, styles TabBarStyles) *TabBar
-```
-
-### Methods
-
-| Method | Description |
-|--------|-------------|
-| `OnChange(fn func(int) tea.Cmd)` | Callback when active tab changes |
-| `ActiveTab() int` | Get the currently active tab index |
-| `SetActiveTab(i int)` | Set active tab and move cursor to match |
-| `CursorTab() int` | Get the cursor position (may differ from active) |
-| `SetTabKeyBinding(index int, keys string, desc ...string)` | Bind a key to activate a specific tab |
-| `BindDefaultActionToKey(binding key.Binding)` | Global shortcut to activate cursor tab |
-
-### Keyboard
-
-| Key | Action |
-|-----|--------|
-| Left / h | Move cursor left |
-| Right / l | Move cursor right |
-| Space | Activate tab under cursor |
-| Enter | Activate tab under cursor |
-
-### Mouse
-
-Clicking on a tab activates it directly and fires `OnChange`. If the clicked tab is already active, nothing happens.
-
-### Per-Tab Accelerator Keys
-
-Bind keyboard shortcuts to activate specific tabs directly, without moving the cursor first:
-
-```go
-tabs.SetTabKeyBinding(0, "ctrl+d")             // help text defaults to tab label ("Overview")
-tabs.SetTabKeyBinding(1, "ctrl+e")             // "Settings"
-tabs.SetTabKeyBinding(2, "ctrl+g", "About")    // explicit description
-```
-
-When the shortcut fires, the tab activates and `OnChange` fires. If the tab is already active, nothing happens. Calling `SetTabKeyBinding` again on the same index replaces the previous binding.
-
-### Two-State Design
-
-The TabBar separates **cursor** (which tab the keyboard highlight is on) from **active** (which tab's content is displayed). When the TabBar gains focus, the cursor resets to the active tab. Moving left/right moves the cursor. Pressing Space/Enter activates the tab under the cursor and fires OnChange.
-
-Rendering:
-- Active tab: bold, highlighted background
-- Cursor tab (focused, not active): yellow highlight
-- Active + cursor (focused, cursor on active tab): active style with underline
-- Other tabs: dim/inactive
 
 ---
 
@@ -576,6 +510,35 @@ outerTabs.AddTab("Details", innerTabs)  // nested TabComponent as tab content
 
 win.Add(outerTabs, widget.TCBCenter)
 ```
+
+### Keyboard
+
+When the tab bar is focused:
+
+| Key | Action |
+|-----|--------|
+| Left / h | Move cursor left |
+| Right / l | Move cursor right |
+| Space | Activate tab under cursor |
+| Enter | Activate tab under cursor |
+
+The tab bar separates **cursor** (keyboard highlight) from **active** (displayed tab). When the bar gains focus, the cursor resets to the active tab. Moving left/right moves the cursor. Pressing Space/Enter activates the tab under the cursor.
+
+### Mouse
+
+Clicking on a tab in the header activates it directly. If the clicked tab is already active, nothing happens.
+
+### Per-Tab Accelerator Keys
+
+Bind keyboard shortcuts to activate specific tabs directly, from anywhere in the component tree:
+
+```go
+tabs.SetTabKeyBinding(0, "ctrl+d")             // help text defaults to tab label ("Dashboard")
+tabs.SetTabKeyBinding(1, "ctrl+e")             // "Settings"
+tabs.SetTabKeyBinding(2, "ctrl+g", "About")    // explicit description
+```
+
+When the shortcut fires, the tab activates and content switches. If the tab is already active, nothing happens. Calling `SetTabKeyBinding` again on the same index replaces the previous binding.
 
 ### How It Stretches
 

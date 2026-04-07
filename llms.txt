@@ -1,0 +1,33 @@
+# Mate
+
+> Mate is a Go component framework for building terminal UIs on top of Bubble Tea. You compose a component tree and set callbacks — no custom Update() or View() needed. It provides focus management, keyboard and mouse event routing, global key bindings, layouts, and popup window support.
+
+Mate uses Bubble Tea as its runtime but replaces the Elm Architecture pattern. Instead of writing Model/Update/View, you create components, add them to containers, and wire callbacks. The framework handles event routing, focus cycling, and rendering automatically.
+
+Key bindings use simple strings: `RegisterKeyBinding("ctrl+q", "Quit", action)` and `BindDefaultActionToKey("ctrl+s", "Save")`.
+
+Layouts: Vertical (stack top-to-bottom, no flex), Horizontal (stack left-to-right, no flex), TCB (Top-Center-Bottom, center stretches to fill remaining space). Only TCB stretches.
+
+Packages: `widget/` (components, containers, layouts), `input/` (focus management), `window/` (windows, popups, Bubble Tea adapter).
+
+## Docs
+
+- [Getting Started](https://raw.githubusercontent.com/muralx/mate/main/docs/getting-started.md): Installation, core concepts, first application walkthrough
+- [Components](https://raw.githubusercontent.com/muralx/mate/main/docs/components.md): All widgets — Button, TextInput, Toggle, CheckboxList, TabComponent, Table, ScrollableText, Card, Text, Field, FormattedTextInput
+- [Layout](https://raw.githubusercontent.com/muralx/mate/main/docs/layout.md): Panel layouts (Vertical, Horizontal, TCB), preferred sizes, common patterns
+- [Focus and Keyboard](https://raw.githubusercontent.com/muralx/mate/main/docs/focus-and-keyboard.md): Focus cycling, key bindings, global shortcuts, event flow
+- [Mouse](https://raw.githubusercontent.com/muralx/mate/main/docs/mouse.md): Hit testing, click-to-focus, mouse event handling
+- [Windows and Popups](https://raw.githubusercontent.com/muralx/mate/main/docs/windows-and-popups.md): MainWindow, PopupWindow, App, popup lifecycle
+- [Styling](https://raw.githubusercontent.com/muralx/mate/main/docs/styling.md): Lip Gloss integration, style structs, BorderConfig, themes
+- [API Reference](https://raw.githubusercontent.com/muralx/mate/main/docs/api-reference.md): Complete type and method reference
+
+## Examples
+
+- [Tab Demo](https://raw.githubusercontent.com/muralx/mate/main/tabdemo/main.go): Nested tabs, cards, text inputs, keyboard shortcuts
+- [UI Demo - Main Window](https://raw.githubusercontent.com/muralx/mate/main/uidemo/main_window.go): Full app with dashboard, server management, settings tabs
+- [UI Demo - Popups](https://raw.githubusercontent.com/muralx/mate/main/uidemo/popups.go): Confirm dialog and form popup patterns
+- [UI Demo - Theme](https://raw.githubusercontent.com/muralx/mate/main/uidemo/theme.go): Custom theme with color palette and style functions
+
+## Optional
+
+- [Integration Tests](https://raw.githubusercontent.com/muralx/mate/main/widget/fullflow_test.go): Full component tree test patterns

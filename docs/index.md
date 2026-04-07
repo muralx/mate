@@ -5,7 +5,7 @@ Mate is a Go component framework for building terminal user interfaces on top of
 ## Documentation
 
 1. **[Getting Started](getting-started.md)** — Installation, first application, core concepts
-2. **[Components](components.md)** — All available widgets: Button, TextInput, Toggle, CheckboxList, TabBar, TabComponent, Table, ScrollableText, Card, Text
+2. **[Components](components.md)** — All available widgets: Button, TextInput, Toggle, CheckboxList, TabComponent, Table, ScrollableText, Card, Text, Field
 3. **[Layout](layout.md)** — Panel layouts (Vertical, Horizontal, TCB), preferred sizes, fields, custom containers
 4. **[Focus and Keyboard](focus-and-keyboard.md)** — Focus cycling, key bindings, global shortcuts, key event flow
 5. **[Mouse](mouse.md)** — Hit testing, click-to-focus, mouse event handling
@@ -51,7 +51,6 @@ package main
 import (
     "fmt"
     tea "github.com/charmbracelet/bubbletea"
-    "github.com/charmbracelet/bubbles/key"
     "github.com/muralx/mate/widget"
     "github.com/muralx/mate/window"
 )
@@ -73,10 +72,7 @@ func main() {
         return tea.Quit
     })
     // Global shortcut: Ctrl+S triggers submit from anywhere
-    submitBtn.BindDefaultActionToKey(key.NewBinding(
-        key.WithKeys("ctrl+s"),
-        key.WithHelp("ctrl+s", "Submit"),
-    ))
+    submitBtn.BindDefaultActionToKey("ctrl+s", "Submit")
     panel.Add(submitBtn, widget.Next)
 
     win.Add(panel, widget.TCBCenter)

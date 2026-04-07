@@ -1,0 +1,3512 @@
+# Mate
+
+> Mate is a Go component framework for building terminal UIs on top of Bubble Tea. You compose a component tree and set callbacks — no custom Update() or View() needed. It provides focus management, keyboard and mouse event routing, global key bindings, layouts, and popup window support.
+
+Mate uses Bubble Tea as its runtime but replaces the Elm Architecture pattern. Instead of writing Model/Update/View, you create components, add them to containers, and wire callbacks. The framework handles event routing, focus cycling, and rendering automatically.
+
+Key bindings use simple strings: `RegisterKeyBinding("ctrl+q", "Quit", action)` and `BindDefaultActionToKey("ctrl+s", "Save")`.
+
+Layouts: Vertical (stack top-to-bottom, no flex), Horizontal (stack left-to-right, no flex), TCB (Top-Center-Bottom, center stretches to fill remaining space). Only TCB stretches.
+
+Packages: `widget/` (components, containers, layouts), `input/` (focus management), `window/` (windows, popups, Bubble Tea adapter).
+
+---
+
+# Getting Started
+
+## Installation
+
+```bash
+go get github.com/muralx/mate
+```
+
+Mate depends on:
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) — the TUI framework
+- [Bubbles](https://github.com/charmbracelet/bubbles) — key binding types
+- [Lip Gloss](https://github.com/charmbracelet/lipgloss) — terminal styling
+
+## How Mate Differs from Bubble Tea
+
+Bubble Tea follows the Elm Architecture: you write a Model, an Update function, and a View function. As your UI grows, you route events manually, track focus yourself, and wire up component interactions inside Update.
+
+Mate replaces that with a component tree. You create components, add them to containers, and set callbacks. The framework handles event routing, focus cycling, keyboard dispatch, and rendering. You still use `tea.Cmd` for side effects and `tea.Program` to run the app — Mate uses Bubble Tea as its runtime, not as a pattern to follow.
+
+If you know Bubble Tea: think of Mate as what happens when you stop writing Update/View and start composing components instead.
+
+## Core Concepts
+
+### Component Tree
+
+Every Mate application is a tree of components. There are three kinds:
+
+| Kind | Can receive focus? | Has children? | Examples |
+|------|-------------------|---------------|----------|
+| **Leaf** | Yes | No | Button, TextInput, Toggle, CheckboxList, Table, ScrollableText |
+| **Container** | No | Yes | Panel, Field, TabComponent |
+| **Display** | No | No | Text, Card |
+
+Containers hold children. Leaves handle keyboard input. Display components just render.
+
+### Layouts
+
+`Panel` (and `Window`) supports three layout strategies:
+
+- **Vertical** — stacks children top-to-bottom at their natural/preferred sizes. No flexing — remaining space is unused. Use for forms and stacked content.
+- **Horizontal** — stacks children left-to-right at their natural/preferred sizes (use `SetSpacing` for gaps). No flexing — remaining space is unused. Use for toolbars and button rows.
+- **TCB** — Top-Center-Bottom: top and bottom use natural/preferred sizes; **center gets all remaining space**. This is the only layout that stretches a component. Use whenever you need a component to fill available height.
+
+Use `Add(child, Position)` to place children. `Next` appends sequentially for all layouts. For TCB, use `TCBTop`, `TCBCenter`, `TCBBottom` to place components in specific slots.
+
+**Important:** Only TCB stretches. If you need a component to fill the remaining space in a container — a Table that should grow to fill a panel, for example — use TCB and put it in the center slot.
+
+### Preferred Sizes
+
+Use `SetPreferredWidth(w)` and `SetPreferredHeight(h)` to give a component a fixed size hint. The layout engine uses this instead of measuring the component's natural rendered size. Leave unset (the default) to let the layout measure naturally.
+
+### The Component Interface
+
+Every component implements `widget.Component`:
+
+```go
+type Component interface {
+    ID() string
+    View() string
+    SetSize(w, h int)
+    Size() (w, h int)
+    SetPosition(x, y int)
+    Position() (x, y int)
+    Visible() bool
+    SetVisible(bool)
+    Enabled() bool
+    SetEnabled(bool)
+    Active() bool
+    Focusable() bool
+    Focused() bool
+    SetFocused(bool) tea.Cmd
+    Parent() Container
+    SetParent(Container)
+    KeyBindings() []key.Binding
+    RegisterKeyBinding(keys, description string, action func() tea.Cmd)
+    ResolveKeyBinding(tea.KeyMsg) (func() tea.Cmd, bool)
+    HandleEvent(event Event) (tea.Cmd, bool)
+    PreferredWidth() int
+    PreferredHeight() int
+    SetPreferredWidth(int)
+    SetPreferredHeight(int)
+}
+```
+
+You rarely implement this yourself. Instead, you compose your UI from the provided widgets.
+
+### Active vs Enabled vs Visible
+
+- **Visible** — whether the component renders. Invisible components are skipped in layout.
+- **Enabled** — whether the component is locally enabled. Set with `SetEnabled(bool)`.
+- **Active** — whether the component is *effectively* enabled. A component is active only if it is enabled AND all its ancestors are enabled. Disabling a Panel disables everything inside it.
+
+```go
+panel.SetEnabled(false)
+// Now panel.Active() == false
+// And every child, grandchild, etc. has Active() == false
+// They remain individually Enabled, but are not Active
+```
+
+### Focus
+
+Only one leaf component has focus at a time. The focused component receives keyboard input. Focus is managed by `input.FocusManager`, which walks the component tree to find focusable, active leaves.
+
+Tab and Shift-Tab cycle focus. Mouse clicks change focus. You can also focus programmatically.
+
+### Event Flow
+
+Mate has two separate event paths:
+
+1. **Keyboard events** are routed by `BaseWindow`:
+   - Tab/Shift-Tab handled by FocusManager for focus cycling
+   - Registered key bindings checked via KeyBindingResolver (children-first)
+   - Remaining keys sent to the focused leaf's `Update()`
+   - `OnKeyPress` callback fires for keys not consumed by any of the above
+
+2. **Mouse events** flow through hit testing:
+   - Hit testing finds the target component
+   - Focus changes if it's a left-click on a focusable component
+   - `HandleEvent(MouseClickEvent{})` dispatched to the target, bubbles up parents
+
+### Windows and Popups
+
+`MainWindow` is a full-screen component tree. `PopupWindow` is an overlay that sits on top of the main window. The internal `Stack` manages focus and rendering — you interact with it via `win.ShowPopup(popup)` and `popup.Close(result)`. `App` wraps a `MainWindow` and implements `tea.Model`.
+
+## Building Your First Application
+
+### Step 1: Create a Window
+
+Every Mate application starts with a `MainWindow`. `NewWindow` defaults to TCB layout:
+
+```go
+win := window.NewWindow("my-window")
+
+// Register a fallthrough key handler for application-level shortcuts
+win.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
+    if msg.String() == "ctrl+c" {
+        return tea.Quit
+    }
+    return nil
+})
+```
+
+### Step 2: Build a Component Tree
+
+Add widgets to the window using `Add(child, position)`:
+
+```go
+win := window.NewWindow("my-window")
+
+// A panel with a text input and a button
+panel := widget.NewPanel("form")
+panel.SetBorder(widget.DefaultBorder())
+
+nameInput := widget.NewTextInput("name", 30)
+nameInput.WithPlaceholder("Type here...")
+nameField := widget.NewField("name-field", "Name", nameInput, widget.DefaultFieldStyles())
+panel.Add(nameField, widget.Next)
+
+btn := widget.NewButton("ok", "OK", widget.DefaultButtonStyles())
+btn.OnPress(func() tea.Cmd {
+    return tea.Quit
+})
+panel.Add(btn, widget.Next)
+
+// TCB: place the form in the center so it expands to fill available space
+win.Add(panel, widget.TCBCenter)
+```
+
+### Step 3: Wire Into Bubble Tea
+
+Create an `App` with your window and pass it to `tea.NewProgram`:
+
+```go
+func main() {
+    win := window.NewWindow("my-window")
+    // ... build component tree ...
+
+    app := window.NewApp(win)
+    tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseAllMotion()).Run()
+}
+```
+
+`NewApp`:
+- Creates a `FocusManager` and focuses the first leaf automatically
+- Handles `tea.WindowSizeMsg` and sizes the window to fill the terminal
+- Routes all messages through the internal stack (base window + any popups)
+- Implements `tea.Model` so you do not need to write a model struct yourself
+
+### Step 4: Add Interactivity
+
+Respond to user actions with callbacks:
+
+```go
+nameInput.OnSubmit(func(value string) tea.Cmd {
+    // Enter was pressed in the text input
+    return nil
+})
+
+nameInput.OnChange(func(value string) tea.Cmd {
+    // Text changed
+    return nil
+})
+
+btn.OnPress(func() tea.Cmd {
+    // Button was pressed (space, enter, or mouse click)
+    return nil
+})
+```
+
+## Next Steps
+
+- [Components](components.md) — Learn about every available widget
+- [Layout](layout.md) — Build complex layouts with containers
+- [Focus and Keyboard](focus-and-keyboard.md) — Understand the keyboard event flow
+- [Windows and Popups](windows-and-popups.md) — Add popup dialogs
+
+---
+
+# Components
+
+All interactive components (leaves) handle keyboard input when focused and can respond to mouse clicks. Each component has default styles and can be customized.
+
+## Button
+
+A focusable action button that responds to Space, Enter, and mouse clicks.
+
+```go
+btn := widget.NewButton("save", "Save", widget.DefaultButtonStyles())
+btn.OnPress(func() tea.Cmd {
+    return saveDocument()
+})
+```
+
+Renders as `[ Save ]` with appropriate styling for normal, focused, and inactive states.
+
+### Constructor
+
+```go
+func NewButton(id, label string, styles ButtonStyles) *Button
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `OnPress(fn func() tea.Cmd)` | Set the callback for button press |
+| `BindDefaultActionToKey(keys string, description ...string)` | Bind a global shortcut that triggers OnPress |
+
+### Styles
+
+```go
+type ButtonStyles struct {
+    Normal  lipgloss.Style  // unfocused appearance
+    Focused lipgloss.Style  // focused appearance
+}
+```
+
+Built-in styles: `DefaultButtonStyles()`, `DefaultPopupButtonStyles()` (dimmer, for trigger buttons).
+
+### Keyboard
+
+| Key | Action |
+|-----|--------|
+| Space | Trigger OnPress |
+| Enter | Trigger OnPress |
+
+### Global Shortcuts
+
+Bind a global key that triggers the button's action from anywhere:
+
+```go
+btn.BindDefaultActionToKey("ctrl+s", "Save")
+```
+
+When Ctrl+S is pressed anywhere in the window, the button receives focus and its OnPress fires.
+
+---
+
+## TextInput
+
+A focusable text input field wrapping Bubble Tea's `textinput` component. Handles character input, cursor movement, and clipboard operations.
+
+```go
+input := widget.NewTextInput("email", 40)
+input.WithPlaceholder("user@example.com")
+input.WithCharLimit(100)
+input.OnSubmit(func(value string) tea.Cmd {
+    return validateEmail(value)
+})
+input.OnChange(func(value string) tea.Cmd {
+    return nil // react to every keystroke
+})
+```
+
+### Constructor
+
+```go
+func NewTextInput(id string, inputWidth int) *TextInput
+```
+
+`inputWidth` sets the visual width of the input area in columns.
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `WithPlaceholder(p string) *TextInput` | Set placeholder text (chainable) |
+| `WithCharLimit(n int) *TextInput` | Set max character count (chainable) |
+| `OnSubmit(fn func(string) tea.Cmd)` | Callback when Enter is pressed |
+| `OnChange(fn func(string) tea.Cmd)` | Callback on every value change |
+| `SetValue(v string)` | Set the input value programmatically |
+| `Value() string` | Get the current value |
+| `SetError(e string)` | Set a validation error message |
+| `Error() string` | Get the current error message |
+
+### Keyboard
+
+When focused, TextInput consumes all key input. It supports standard text editing: arrow keys, Home/End, Ctrl+A (select all), Ctrl+K (kill line), backspace, delete, and paste.
+
+| Key | Action |
+|-----|--------|
+| Enter | Trigger OnSubmit |
+| All other keys | Handled by the inner text input |
+
+### Focus and Cursor
+
+When a TextInput gains focus, `SetFocused(true)` returns a `tea.Cmd` that starts the cursor blink timer. Always batch this command into your Bubble Tea update loop.
+
+---
+
+## FormattedTextInput
+
+Extends TextInput with validation and formatting that run automatically on blur (when the input loses focus).
+
+```go
+dateInput := widget.NewFormattedTextInput("date", 12)
+dateInput.WithPlaceholder("YYYY-MM-DD")
+
+dateInput.WithValidation(func(s string) error {
+    _, err := time.Parse("2006-01-02", s)
+    return err
+})
+
+dateInput.WithFormat(func(s string) string {
+    t, err := time.Parse("2006-01-02", s)
+    if err != nil { return s }
+    return t.Format("2006-01-02") // normalize format
+})
+```
+
+### Constructor
+
+```go
+func NewFormattedTextInput(id string, inputWidth int) *FormattedTextInput
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `WithValidation(fn func(string) error)` | Set validator (runs on blur) |
+| `WithFormat(fn func(string) string)` | Set formatter (runs on blur after validation passes) |
+
+Inherits all TextInput methods (`WithPlaceholder`, `Value`, `SetValue`, etc.).
+
+### Behavior
+
+When the input loses focus:
+1. Validation runs. If it returns an error, `SetError()` is called with the message.
+2. If validation passes, the format function runs and replaces the value.
+
+---
+
+## Toggle
+
+A boolean on/off switch with two rendering modes.
+
+```go
+// On/Off mode: renders "Feature:[on]" or "Feature:[off]"
+toggle := widget.NewToggle("toggle1", "Feature", false, widget.ToggleModeOnOff, widget.DefaultToggleStyles())
+
+// Radio mode: renders "[Live] [Cache]" with one highlighted
+modeToggle := widget.NewToggle("mode", "Source", true, widget.ToggleModeRadio, widget.DefaultToggleStyles())
+modeToggle.SetLabels("[Live]", "[Cache]")
+
+toggle.OnChange(func(on bool) tea.Cmd {
+    return applyFilter(on)
+})
+```
+
+### Constructor
+
+```go
+func NewToggle(id, label string, initial bool, mode ToggleMode, styles ToggleStyles) *Toggle
+```
+
+- `label` — prefix text (rendered as "Label:")
+- `initial` — starting state
+- `mode` — `ToggleModeOnOff` or `ToggleModeRadio`
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `SetLabels(onLabel, offLabel string)` | Customize the on/off display text |
+| `OnChange(fn func(bool) tea.Cmd)` | Callback when state changes |
+| `On() bool` | Get current state |
+| `SetOn(v bool)` | Set state programmatically |
+| `BindDefaultActionToKey(keys string, description ...string)` | Global shortcut that toggles state |
+
+### Keyboard
+
+| Key | Action |
+|-----|--------|
+| Space | Toggle on/off |
+| Enter | Toggle on/off |
+
+### Rendering Modes
+
+**OnOff mode** — Shows one value at a time, padded for stable width:
+```
+Feature:[on]     (focused: yellow)
+Feature:[off]    (unfocused: dim)
+```
+
+**Radio mode** — Shows both labels, highlights the active one:
+```
+Source:[Live] [Cache]    (Live is on, highlighted)
+```
+
+---
+
+## CheckboxList
+
+A scrollable list of checkable items with keyboard navigation.
+
+```go
+items := []widget.CheckboxItem{
+    {Label: "node-1", Value: "n1"},
+    {Label: "node-2", Value: "n2", Checked: true},
+    {Label: "node-3", Value: "n3"},
+    {Label: "--- Group ---", Value: "", IsGroup: true},
+    {Label: "node-4", Value: "n4"},
+}
+list := widget.NewCheckboxList("nodes", items, widget.DefaultCheckboxListStyles())
+list.OnChange(func(items []widget.CheckboxItem) tea.Cmd {
+    return updateFilter(items)
+})
+```
+
+### Constructor
+
+```go
+func NewCheckboxList(id string, items []CheckboxItem, styles CheckboxListStyles) *CheckboxList
+```
+
+### CheckboxItem
+
+```go
+type CheckboxItem struct {
+    Label   string  // display text
+    Value   string  // programmatic value
+    Checked bool    // checked state
+    IsGroup bool    // group headers (rendered differently)
+}
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `OnChange(fn func([]CheckboxItem) tea.Cmd)` | Callback when any item is toggled |
+| `Items() []CheckboxItem` | Get all items with current state |
+| `Cursor() int` | Get cursor position |
+| `Selected() []string` | Get values of all checked items |
+| `BindDefaultActionToKey(keys string, description ...string)` | Global shortcut to toggle cursor item |
+
+### Keyboard
+
+| Key | Action |
+|-----|--------|
+| Up / k | Move cursor up |
+| Down / j | Move cursor down |
+| Space | Toggle item at cursor |
+
+### Mouse
+
+Clicking on an item moves the cursor to it and toggles its checked state. The click Y coordinate is used to determine which item was clicked.
+
+---
+
+---
+
+## Table
+
+A generic, column-aware data table with scrolling, cursor selection, and per-cell rendering. Data is provided via a `TableDataSource` interface, enabling lazy data provision and cross-column rendering.
+
+```go
+columns := []widget.ColumnDef{
+    {Title: "TIME", Width: 12},
+    {Title: "LEVEL", Width: 5, Renderer: levelRenderer},
+    {Title: "MESSAGE", Width: 0}, // 0 = take remaining space
+}
+
+ds := widget.NewSliceDataSource([][]string{
+    {"12:00:01", "INFO", "Task completed successfully"},
+    {"12:00:02", "WARN", "Slow response detected"},
+    {"12:00:03", "ERROR", "Connection refused"},
+})
+
+table := widget.NewTable("data-table", columns, ds, widget.DefaultTableStyles())
+```
+
+### Constructor
+
+```go
+func NewTable(id string, columns []ColumnDef, ds TableDataSource, styles TableStyles) *Table
+```
+
+### TableDataSource
+
+```go
+type TableDataSource interface {
+    RowCount() int
+    CellData(row, col int) string
+}
+```
+
+The Table queries the data source each render cycle. To change the data, call `SetDataSource` with a new source. The Table guarantees it will only call `CellData` with valid indices (`row < RowCount()`, `col < len(columns)`).
+
+### SliceDataSource
+
+A built-in adapter for `[][]string`:
+
+```go
+func NewSliceDataSource(data [][]string) *SliceDataSource
+```
+
+`SetData(data [][]string)` replaces the backing data. The Table re-reads on the next render.
+
+### ColumnDef
+
+```go
+type ColumnDef struct {
+    Title    string        // header text
+    Width    int           // fixed width; 0 = take remaining space
+    Renderer CellRenderer  // custom cell renderer; nil = DefaultCellRenderer
+}
+```
+
+### CellRenderer
+
+```go
+type CellRenderer func(ds TableDataSource, row, col int, selected bool, width int, styles TableStyles) string
+```
+
+The renderer receives the data source (for cross-column lookups), position, selection state, the resolved cell width, and the table's styles. It returns a fully styled string. The renderer is responsible for all styling including selection background. Example:
+
+```go
+func levelRenderer(ds widget.TableDataSource, row, col int, selected bool, width int, styles widget.TableStyles) string {
+    value := ds.CellData(row, col)
+    style := styles.Cell
+    if selected {
+        style = styles.Selected.Width(width)
+    }
+    switch value {
+    case "ERROR":
+        style = style.Foreground(lipgloss.Color("#ef5350")).Bold(true)
+    case "WARN":
+        style = style.Foreground(lipgloss.Color("#ffb74d"))
+    }
+    return style.Render(value)
+}
+```
+
+When `Renderer` is nil, the built-in `DefaultCellRenderer` is used, which applies `styles.Selected` with full-width background for selected rows and `styles.Cell` otherwise.
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `SetDataSource(ds TableDataSource)` | Replace the data source (cursor is clamped to range) |
+| `DataSource() TableDataSource` | Get the current data source |
+| `Cursor() int` | Get cursor row index |
+| `SetCursor(c int)` | Set cursor position |
+| `OnRowKeyPress(fn func(row int, msg tea.KeyMsg) tea.Cmd)` | Handler for unconsumed keys, receives cursor row |
+| `OnRowClick(fn func(row int) tea.Cmd)` | Handler for row clicks |
+
+### Keyboard
+
+| Key | Action |
+|-----|--------|
+| Up / k | Move cursor up |
+| Down / j | Move cursor down |
+| Page Up | Move cursor up by viewport height |
+| Page Down | Move cursor down by viewport height |
+| Home | Jump to first row |
+| End | Jump to last row |
+
+### Mouse
+
+Clicking on a data row moves the cursor to that row. Clicks on the header row are ignored. The click position accounts for the scroll offset, so clicking the first visible row selects the correct underlying data row.
+
+Mouse wheel scrolling moves the cursor up/down by 3 rows per scroll tick, keeping the cursor within bounds.
+
+### Scrolling
+
+The table automatically scrolls to keep the cursor visible. The viewport height is `component height - 1` (subtracting the header row). When the cursor moves above the visible area, the view scrolls up. When it moves below, the view scrolls down.
+
+### Flex Columns
+
+Set `Width: 0` on a column to make it fill the remaining horizontal space after fixed-width columns are allocated. Only one flex column is supported.
+
+---
+
+## Card
+
+A non-focusable bordered display box for summaries. Shows a title and a value.
+
+```go
+card := widget.NewCard("cpu", "CPU Usage", "42%", widget.DefaultCardStyles())
+card.SetPreferredWidth(20)
+card.SetPreferredHeight(4)
+
+// Highlight when value exceeds threshold
+card.SetAlert(true) // switches to alert style
+card.SetValue("98%")
+```
+
+### Constructor
+
+```go
+func NewCard(id, title, value string, styles CardStyles) *Card
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `SetValue(value string)` | Update displayed value |
+| `Value() string` | Get current value |
+| `SetAlert(alert bool)` | Toggle alert styling |
+
+Card is not focusable. It renders a bordered box with the title on the first line and the value on the second.
+
+---
+
+## Text
+
+A non-focusable styled text display component. Used internally by Field for labels and separators, but also useful on its own.
+
+```go
+txt := widget.NewText("status", "Ready", lipgloss.NewStyle().Foreground(lipgloss.Color("#81c784")))
+txt.SetText("Processing...")
+txt.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb74d")))
+```
+
+### Constructor
+
+```go
+func NewText(id, text string, style lipgloss.Style) *Text
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `SetText(text string)` | Update displayed text |
+| `GetText() string` | Get current text |
+| `SetStyle(s lipgloss.Style)` | Change rendering style |
+| `Style() lipgloss.Style` | Get current style |
+
+Text is not focusable. When inactive (a parent is disabled), it renders with a faint style. The Text component respects `SetPreferredWidth` for width and `SetAlignment` for horizontal alignment.
+
+---
+
+## TabComponent
+
+A container that manages tab switching. Internally uses TCB layout: the TabBar header sits at the top, and the active tab's content panel fills all remaining height (center slot). This means a TabComponent placed in a TCB center slot will correctly expand to fill available space, and the active content panel within it will also expand.
+
+```go
+tabs := widget.NewTabComponent("main-tabs", widget.DefaultTabBarStyles())
+
+dashPanel := widget.NewPanel("dash", widget.TCB)
+// ... populate dashPanel ...
+
+settingsPanel := widget.NewPanel("settings", widget.Vertical)
+// ... populate settingsPanel ...
+
+tabs.AddTab("Dashboard", dashPanel)
+tabs.AddTab("Settings", settingsPanel)
+
+// Optional: bind keyboard shortcuts to switch tabs directly
+tabs.SetTabKeyBinding(0, "ctrl+d", "Dashboard")
+tabs.SetTabKeyBinding(1, "ctrl+e", "Settings")
+
+win.Add(tabs, widget.TCBCenter)
+```
+
+### Constructor
+
+```go
+func NewTabComponent(id string, styles TabBarStyles) *TabComponent
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `AddTab(label string, content Component)` | Add a tab with the given label and content component |
+| `SetTabKeyBinding(index int, keys string, description ...string)` | Bind a keyboard shortcut to activate a specific tab |
+| `ActiveTab() int` | Get the index of the currently active tab |
+| `SetActiveTab(index int)` | Switch to the tab at the given index |
+| `TabBar() *TabBar` | Get the underlying TabBar leaf component |
+
+### Nesting
+
+TabComponent supports nesting — a TabComponent can be the content of another TabComponent's tab:
+
+```go
+innerTabs := widget.NewTabComponent("inner-tabs", widget.DefaultTabBarStyles())
+innerTabs.AddTab("Sub A", subPanelA)
+innerTabs.AddTab("Sub B", subPanelB)
+
+outerTabs := widget.NewTabComponent("outer-tabs", widget.DefaultTabBarStyles())
+outerTabs.AddTab("Overview", overviewPanel)
+outerTabs.AddTab("Details", innerTabs)  // nested TabComponent as tab content
+
+win.Add(outerTabs, widget.TCBCenter)
+```
+
+### Keyboard
+
+When the tab bar is focused:
+
+| Key | Action |
+|-----|--------|
+| Left / h | Move cursor left |
+| Right / l | Move cursor right |
+| Space | Activate tab under cursor |
+| Enter | Activate tab under cursor |
+
+The tab bar separates **cursor** (keyboard highlight) from **active** (displayed tab). When the bar gains focus, the cursor resets to the active tab. Moving left/right moves the cursor. Pressing Space/Enter activates the tab under the cursor.
+
+### Mouse
+
+Clicking on a tab in the header activates it directly. If the clicked tab is already active, nothing happens.
+
+### Per-Tab Accelerator Keys
+
+Bind keyboard shortcuts to activate specific tabs directly, from anywhere in the component tree:
+
+```go
+tabs.SetTabKeyBinding(0, "ctrl+d")             // help text defaults to tab label ("Dashboard")
+tabs.SetTabKeyBinding(1, "ctrl+e")             // "Settings"
+tabs.SetTabKeyBinding(2, "ctrl+g", "About")    // explicit description
+```
+
+When the shortcut fires, the tab activates and content switches. If the tab is already active, nothing happens. Calling `SetTabKeyBinding` again on the same index replaces the previous binding.
+
+### How It Stretches
+
+TabComponent uses TCB layout internally. When you place a TabComponent in a TCB center slot (e.g., in a window), the layout engine gives it all remaining height. TabComponent then gives all remaining height (after the TabBar header row) to the active content panel. This chain means content always fills available space without any manual size hints.
+
+---
+
+## ScrollableText
+
+A focusable, scrollable, read-only text display area. Renders text within its allocated bounds and scrolls with keyboard input when focused. Content may contain ANSI color codes.
+
+```go
+st := widget.NewScrollableText("detail", widget.DefaultScrollableTextStyles())
+st.SetPreferredWidth(80)
+st.SetPreferredHeight(20)
+st.SetContent(longText)
+```
+
+### Constructor
+
+```go
+func NewScrollableText(id string, styles ScrollableTextStyles) *ScrollableText
+func DefaultScrollableTextStyles() ScrollableTextStyles
+```
+
+### ScrollableTextStyles
+
+```go
+type ScrollableTextStyles struct {
+    Normal  lipgloss.Style  // unfocused appearance
+    Focused lipgloss.Style  // focused appearance
+}
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `SetContent(text string)` | Set the full text content (resets scroll position) |
+| `Content() string` | Get the current content |
+| `SetWrap(bool)` | Set line wrapping (default: true). When false, lines are truncated |
+| `ScrollTo(line int)` | Scroll to a specific line (clamped) |
+| `ScrollTop()` | Scroll to the top |
+
+### Keyboard
+
+| Key | Action |
+|-----|--------|
+| Up / k | Scroll up one line |
+| Down / j | Scroll down one line |
+| Page Up | Scroll up by viewport height |
+| Page Down | Scroll down by viewport height |
+| Home | Scroll to top |
+| End | Scroll to bottom |
+
+### Mouse
+
+Mouse wheel scrolling moves the viewport up/down by 3 lines per scroll tick. The component does not need keyboard focus to receive scroll events — scrolling targets the component under the cursor.
+
+---
+
+# Layout
+
+Mate uses Bubble Tea's convention: layout happens in `View()`. There is no separate layout pass. Containers compute child positions during rendering because that's the only point where they know their own dimensions.
+
+## Layout Types
+
+Panel (and Window) support three layout strategies:
+
+| Layout | Behavior |
+|--------|----------|
+| `Vertical` | Stacks children top-to-bottom. Each child gets the container's full content width and its preferred/natural height. **No flexing** — remaining space below the last child is unused. |
+| `Horizontal` | Stacks children left-to-right. Each child gets the container's full content height and its preferred/natural width. **No flexing** — remaining space to the right is unused. |
+| `TCB` | Top-Center-Bottom. Top and Bottom get their preferred/natural size. **Center gets ALL remaining space** — this is the only layout that stretches a component. |
+
+> **Key rule: Only TCB stretches.** If you need a child to fill the available height of a container, use TCB layout and put the component in the center slot. Vertical and Horizontal never stretch their children.
+
+## When to Use Which Layout
+
+| Situation | Layout to use |
+|-----------|--------------|
+| Form with stacked fields and buttons | `Vertical` |
+| Toolbar or row of buttons | `Horizontal` |
+| Cards displayed side by side | `Horizontal` |
+| Main content area that must fill remaining height | `TCB` (put it in center) |
+| Window with tab bar at top and content filling the rest | `TCB` |
+| Bordered panel wrapping a Table | `TCB` with the Table as center (not Vertical — see note below) |
+| Dashboard: cards top, table center, detail bottom | `TCB` |
+
+**Note on bordered panels around a Table:** Use TCB layout, not Vertical. With Vertical layout, the Panel measures the Table's natural height, which for an empty Table is just 1 row. With TCB, the Table is in the center slot and gets all remaining space regardless of its natural height.
+
+## Containers
+
+### Panel
+
+Panel is the universal container. It has a configurable layout, an optional border, an optional title, and configurable spacing.
+
+```go
+// Vertical layout (default) — form with stacked fields
+panel := widget.NewPanel("settings")
+panel.SetBorder(widget.DefaultBorder())
+panel.SetTitle("Settings")
+
+panel.Add(field1, widget.Next)
+panel.Add(field2, widget.Next)
+panel.Add(submitBtn, widget.Next)
+```
+
+```go
+// Horizontal layout — toolbar with buttons
+toolbar := widget.NewPanel("toolbar", widget.Horizontal)
+toolbar.SetSpacing(2)
+
+toolbar.Add(saveBtn, widget.Next)
+toolbar.Add(cancelBtn, widget.Next)
+toolbar.Add(statusText, widget.Next)
+```
+
+```go
+// TCB layout — center fills remaining height
+win := window.NewWindow("main") // Window defaults to TCB
+
+tabs := widget.NewTabComponent("tabs", widget.DefaultTabBarStyles())
+tabs.AddTab("Overview", overviewPanel)
+tabs.AddTab("Settings", settingsPanel)
+statusBar := widget.NewText("status", "Ready", lipgloss.NewStyle())
+
+win.Add(tabs, widget.TCBCenter)
+win.Add(statusBar, widget.TCBBottom)
+```
+
+Panel renders children according to its layout. When any descendant is focused and a border is set, the border color switches to its active color.
+
+**Positioning and sizing:** Panel automatically sets each child's position and size during `View()`. You do not need to manually position children inside a Panel.
+
+### Add Method and Position
+
+Use `Add(child, Position)` to place children:
+
+```go
+panel.Add(child, widget.Next)        // append sequentially (Vertical/Horizontal/TCB)
+panel.Add(child, widget.TCBTop)      // TCB only: place in top slot
+panel.Add(child, widget.TCBCenter)   // TCB only: place in center slot
+panel.Add(child, widget.TCBBottom)   // TCB only: place in bottom slot
+```
+
+For `Vertical` and `Horizontal` layouts, only `Next` is valid. For `TCB`, you can use `Next` to fill slots in order (Top → Center → Bottom), or specify the slot explicitly.
+
+### SetBorder
+
+```go
+// Use the default border (rounded, blue/cyan on focus)
+panel.SetBorder(widget.DefaultBorder())
+
+// Or a custom border
+panel.SetBorder(widget.SingleLineBorder("#444444", "#4fc3f7"))
+```
+
+See `BorderConfig` in the [API Reference](api-reference.md) for the full type definition.
+
+### Preferred Sizes
+
+Use `SetPreferredWidth` and `SetPreferredHeight` to give a component a fixed size hint. The layout engine uses this instead of measuring the component's natural size:
+
+```go
+sidebar := widget.NewPanel("sidebar")
+sidebar.SetPreferredWidth(30)
+// sidebar will always be 30 columns wide in a Horizontal parent
+
+header := widget.NewPanel("header")
+header.SetPreferredHeight(3)
+// header will always be 3 rows tall in a Vertical or TCB parent
+```
+
+If no preferred size is set (the default), the layout engine measures the component's natural rendered size.
+
+`SetSize` is used internally by the layout engine — you do not call it directly except when building custom containers.
+
+### Field
+
+A horizontal composition of label, separator, and input component. The label automatically highlights when any child has focus.
+
+```go
+nameInput := widget.NewTextInput("name", 30)
+nameField := widget.NewField("name-field", "Name", nameInput, widget.DefaultFieldStyles())
+```
+
+Renders as: `Name: [text input here]`
+
+Field uses Horizontal layout internally. It manages three children:
+1. A `Text` component for the label
+2. A `Text` component for the separator (": ")
+3. The input component you provide
+
+You can add more children after construction:
+
+```go
+// Add a popup button after the input
+popupBtn := widget.NewButton("name-popup", "[▾]", widget.DefaultPopupButtonStyles())
+nameField.AddChild(popupBtn)
+// Renders: Name: [text input here][▾]
+```
+
+#### FieldStyles
+
+```go
+type FieldStyles struct {
+    Label     lipgloss.Style  // label when no child is focused
+    LabelHot  lipgloss.Style  // label when a child has focus (highlighted)
+    Separator lipgloss.Style  // separator style (constant)
+}
+```
+
+**Positioning:** Field sets child positions horizontally during `View()`, measuring each child's rendered width and placing the next one to the right. This enables correct mouse hit testing across all children.
+
+#### Accessing Field Parts
+
+```go
+field.Label()     // *Text — the label component
+field.Separator() // *Text — the separator component
+field.Input()     // Component — the input you provided
+```
+
+## Common Patterns
+
+### Bordered Panel Around a Table
+
+Use TCB layout — not Vertical. With Vertical, the Panel measures the Table's natural height (1 row for an empty table). With TCB, the Table expands to fill all available space.
+
+```go
+tablePanel := widget.NewPanel("table-panel", widget.TCB)
+tablePanel.SetBorder(widget.DefaultBorder())
+tablePanel.SetTitle("Results")
+
+table := widget.NewTable("results", columns, ds, widget.DefaultTableStyles())
+tablePanel.Add(table, widget.TCBCenter)  // Table fills all remaining height
+```
+
+### Dashboard Layout (TCB: cards top, table center, detail bottom)
+
+```go
+win := window.NewWindow("dashboard") // defaults to TCB
+
+// Top: a row of summary cards
+cardsRow := widget.NewPanel("cards", widget.Horizontal)
+cardsRow.SetSpacing(2)
+cardsRow.Add(widget.NewCard("cpu", "CPU", "42%", widget.DefaultCardStyles()), widget.Next)
+cardsRow.Add(widget.NewCard("mem", "Memory", "3.1 GB", widget.DefaultCardStyles()), widget.Next)
+cardsRow.Add(widget.NewCard("err", "Errors", "0", widget.DefaultCardStyles()), widget.Next)
+
+// Center: data table fills remaining height
+tablePanel := widget.NewPanel("table-panel", widget.TCB)
+tablePanel.SetBorder(widget.DefaultBorder())
+tablePanel.SetTitle("Events")
+table := widget.NewTable("events", columns, ds, widget.DefaultTableStyles())
+tablePanel.Add(table, widget.TCBCenter)
+
+// Bottom: detail / status line
+detailText := widget.NewText("detail", "Select a row to view details", lipgloss.NewStyle())
+
+win.Add(cardsRow, widget.TCBTop)
+win.Add(tablePanel, widget.TCBCenter)
+win.Add(detailText, widget.TCBBottom)
+```
+
+### Form Layout (Vertical: fields stacked)
+
+```go
+form := widget.NewPanel("form", widget.Vertical)
+form.SetBorder(widget.DefaultBorder())
+form.SetTitle("New User")
+
+form.Add(widget.NewField("name-f", "Name",  widget.NewTextInput("name", 30), widget.DefaultFieldStyles()), widget.Next)
+form.Add(widget.NewField("email-f", "Email", widget.NewTextInput("email", 30), widget.DefaultFieldStyles()), widget.Next)
+form.Add(widget.NewField("role-f", "Role",  roleToggle, widget.DefaultFieldStyles()), widget.Next)
+
+buttons := widget.NewPanel("buttons", widget.Horizontal)
+buttons.SetSpacing(2)
+buttons.Add(submitBtn, widget.Next)
+buttons.Add(cancelBtn, widget.Next)
+form.Add(buttons, widget.Next)
+```
+
+### Toolbar (Horizontal: buttons with spacing)
+
+```go
+toolbar := widget.NewPanel("toolbar", widget.Horizontal)
+toolbar.SetSpacing(2)
+
+toolbar.Add(newBtn, widget.Next)
+toolbar.Add(editBtn, widget.Next)
+toolbar.Add(deleteBtn, widget.Next)
+```
+
+## Building Component Trees
+
+### Parent-Child Relationships
+
+When you call `Add()`, the child's parent is set automatically. This enables:
+- `Active()` propagation — disabling a parent makes all descendants inactive
+- `InnerFocused()` — containers know when any descendant has focus
+- Event bubbling — mouse events bubble up the parent chain
+
+```go
+panel := widget.NewPanel("panel")
+panel.SetBorder(widget.DefaultBorder())
+field := widget.NewField("field", "Name", input, widget.DefaultFieldStyles())
+panel.Add(field, widget.Next)
+
+// Now:
+// field.Parent() == panel
+// input.Parent() == field
+```
+
+### Nesting
+
+Containers can be nested to any depth:
+
+```go
+outerPanel := widget.NewPanel("outer")
+outerPanel.SetBorder(widget.DefaultBorder())
+
+innerPanel1 := widget.NewPanel("inner1")
+innerPanel1.SetBorder(widget.DefaultBorder())
+innerPanel1.SetTitle("Connection")
+innerPanel1.Add(hostField, widget.Next)
+innerPanel1.Add(portField, widget.Next)
+
+innerPanel2 := widget.NewPanel("inner2")
+innerPanel2.SetBorder(widget.DefaultBorder())
+innerPanel2.SetTitle("Authentication")
+innerPanel2.Add(userField, widget.Next)
+innerPanel2.Add(passField, widget.Next)
+
+outerPanel.Add(innerPanel1, widget.Next)
+outerPanel.Add(innerPanel2, widget.Next)
+outerPanel.Add(connectBtn, widget.Next)
+```
+
+Focus, active state, and mouse events all propagate correctly through any nesting depth.
+
+### Visibility
+
+Hide components with `SetVisible(false)`. Hidden components:
+- Are not rendered by their parent's `View()`
+- Are skipped by the FocusManager (their leaves cannot receive focus)
+- Do not receive events
+
+```go
+advancedPanel.SetVisible(false) // hide the panel and all its children
+
+// Later...
+advancedPanel.SetVisible(true)  // show it again
+```
+
+### Enabling/Disabling
+
+Disable components with `SetEnabled(false)`. Disabled components:
+- Render with a faint/dimmed style
+- Cannot receive focus (FocusManager skips inactive leaves)
+- Do not respond to keyboard or mouse input
+- Propagate disabled state to all descendants via `Active()`
+
+```go
+// Disable a specific field
+notesField.SetEnabled(false)
+
+// Disable an entire section
+settingsPanel.SetEnabled(false) // everything inside becomes inactive
+```
+
+A component is `Active()` only when it is `Enabled()` AND all its ancestors are `Enabled()`. This means you can disable a single component or an entire subtree.
+
+## Size and Alignment
+
+### Preferred vs Computed Sizes
+
+There are two ways a component gets its size:
+
+- **Preferred size** — set by you with `SetPreferredWidth(w)` / `SetPreferredHeight(h)`. The layout engine uses this directly.
+- **Natural size** — measured by the layout engine by calling `View()` and measuring the output. Used when no preferred size is set.
+
+In TCB layout, the center-slot component always gets all remaining height, regardless of any preferred size it has.
+
+`SetSize(w, h)` is used internally by the layout engine to apply the computed size before final rendering. You should not call it directly.
+
+### Components Must Render at Their Allocated Size
+
+When the layout engine calls `SetSize(w, h)` on a component, the component must render at exactly that size. `RenderInSize()` (available on `BaseComponent`) handles this automatically for leaf components. Custom containers must respect the dimensions set by the layout engine in their own `View()` implementation.
+
+### Alignment
+
+Leaf components support horizontal alignment within their allocated width:
+
+```go
+btn.SetPreferredWidth(40)
+btn.SetAlignment(widget.AlignCenter)  // centers "[ OK ]" in 40 columns
+btn.SetAlignment(widget.AlignRight)   // right-aligns
+btn.SetAlignment(widget.AlignLeft)    // left-aligns (default)
+```
+
+Available alignments: `AlignLeft`, `AlignCenter`, `AlignRight`.
+
+## Custom Containers
+
+To create a custom container, embed `BaseContainer` and pass `self` to the constructor:
+
+```go
+type Sidebar struct {
+    widget.BaseContainer
+    styles SidebarStyles
+}
+
+func NewSidebar(id string, styles SidebarStyles) *Sidebar {
+    s := &Sidebar{styles: styles}
+    s.BaseContainer = *widget.NewBaseContainer(id, s)
+    return s
+}
+
+func (s *Sidebar) View() string {
+    // Custom layout logic
+    var parts []string
+    px, py := s.Position()
+    yOffset := py
+    for _, child := range s.Children() {
+        if !child.Visible() { continue }
+        child.SetPosition(px, yOffset)
+        rendered := child.View()
+        parts = append(parts, rendered)
+        yOffset += lipgloss.Height(rendered)
+    }
+    return s.styles.Border.Render(
+        lipgloss.JoinVertical(lipgloss.Left, parts...),
+    )
+}
+```
+
+The `self` parameter ensures that when children are added, their `Parent()` returns your concrete type (not `BaseContainer`). This is required for correct `Active()` propagation and event bubbling.
+
+When creating standalone `BaseContainer` instances for testing or simple grouping, pass `nil` as `self` — it defaults to the BaseContainer itself:
+
+```go
+group := widget.NewBaseContainer("group", nil)
+group.AddChild(btn1)
+group.AddChild(btn2)
+```
+
+---
+
+# Focus and Keyboard
+
+## Focus Model
+
+Only one leaf component has focus at a time. The focused leaf receives keyboard input. Focus is managed by `input.FocusManager`, which the `Stack` creates and provides to your window's `Update()` method.
+
+### Which Components Can Receive Focus?
+
+A leaf can receive focus if all three conditions are met:
+1. It implements the `Leaf` interface (all interactive widgets do)
+2. `Focusable()` returns true (all leaves return true; containers return false)
+3. `Active()` returns true (the component and all its ancestors are enabled)
+
+### Focus Order
+
+FocusManager walks the component tree depth-first to collect focusable, active leaves. The order matches the order components were added to their containers:
+
+```go
+panel.Add(field1, widget.Next)    // field1's input is leaf 0
+panel.Add(field2, widget.Next)    // field2's input is leaf 1
+panel.Add(submitBtn, widget.Next) // submitBtn is leaf 2
+```
+
+Tab cycles through leaves in this order. Shift-Tab cycles in reverse.
+
+## Keyboard Event Flow
+
+The framework handles all keyboard routing automatically inside `BaseWindow`. The flow is:
+
+```
+Key arrives at BaseWindow (internal):
+
+1. Tab / Shift-Tab
+   -> FocusManager.Next() / Prev()
+   -> Returns tea.Cmd (may include cursor blink start)
+   -> DONE
+
+2. KeyBindingResolver.Resolve(msg)
+   -> Walks entire component tree looking for registered bindings
+   -> If match found on a focusable component: focus it first, then call action
+   -> If match found on a non-focusable component: call action without focus change
+   -> Returns tea.Cmd
+   -> DONE
+
+3. FocusedLeaf.Update(msg)
+   -> The focused leaf handles the key internally
+   -> Component may call its OnKeyPress callback for unconsumed keys
+   -> Returns (tea.Cmd, consumed bool)
+   -> DONE
+
+4. Window OnKeyPress callback
+   -> Fallthrough for keys not consumed by steps 1-3
+   -> DONE
+```
+
+### Window-Level Keys
+
+Use `RegisterKeyBinding` for global shortcuts that should fire before the focused leaf sees the key. Use `OnKeyPress` for fallthrough keys that should only fire if nothing else consumed them:
+
+```go
+win := window.NewWindow("main")
+
+// Global shortcut — fires before focused leaf (step 2)
+win.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd {
+    return createItem()
+})
+
+// Fallthrough — fires after focused leaf (step 4)
+win.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
+    if msg.String() == "ctrl+c" {
+        return tea.Quit
+    }
+    return nil
+})
+```
+
+## Global Key Bindings
+
+Register key bindings on any component. The KeyBindingResolver checks these before routing to the focused leaf.
+
+### RegisterKeyBinding
+
+Register a custom action for a key on any component:
+
+```go
+// On a window
+win.RegisterKeyBinding("ctrl+x", "Quit", func() tea.Cmd {
+    return tea.Quit
+})
+
+// On any component
+panel.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd {
+    return createNew()
+})
+```
+
+The first argument is the key combination (e.g., `"ctrl+s"`, `"space"`, `"enter"`). The second is a description used for help text display (pass `""` to hide from status bars).
+
+### BindDefaultActionToKey
+
+For interactive components, bind a global shortcut to the component's default action:
+
+```go
+// Button: shortcut triggers OnPress
+saveBtn.OnPress(func() tea.Cmd { return save() })
+saveBtn.BindDefaultActionToKey("ctrl+s", "Save")
+
+// Toggle: shortcut toggles on/off
+toggle.BindDefaultActionToKey("ctrl+g", "Toggle option")
+
+// CheckboxList: shortcut toggles the item at cursor
+nodeList.BindDefaultActionToKey("ctrl+a", "Toggle all")
+
+// TabBar: shortcut activates the tab at cursor
+tabs.BindDefaultActionToKey("ctrl+t", "Switch tab")
+```
+
+The description is optional — if omitted, it defaults to the component's label.
+
+`BindDefaultActionToKey` is available on: **Button**, **Toggle**, **CheckboxList**, **TabBar**.
+
+When the shortcut is pressed:
+1. If the component is focusable and active, it receives focus first
+2. Then the default action fires (same as pressing Space/Enter on the component)
+
+### RemoveKeyBinding
+
+Remove a previously registered key binding. Pass a `key.Binding` that matches the key combination to remove:
+
+```go
+import "github.com/charmbracelet/bubbles/key"
+
+panel.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd { return createNew() })
+
+// Later, remove it by matching the key
+panel.RemoveKeyBinding(key.NewBinding(key.WithKeys("ctrl+n")))
+```
+
+Matches by key combination. No-op if the binding is not found.
+
+### TabComponent Per-Tab Accelerators
+
+Bind keyboard shortcuts to activate specific tabs by index:
+
+```go
+tabs := widget.NewTabComponent("tabs", widget.DefaultTabBarStyles())
+tabs.AddTab("Overview", overviewPanel)
+tabs.AddTab("Details", detailsPanel)
+tabs.AddTab("Settings", settingsPanel)
+
+tabs.SetTabKeyBinding(0, "ctrl+d")                // help desc defaults to "Overview"
+tabs.SetTabKeyBinding(1, "ctrl+e")                // help desc defaults to "Details"
+tabs.SetTabKeyBinding(2, "ctrl+g", "Settings")    // explicit help description
+```
+
+When the shortcut fires, the tab activates and the corresponding content panel is shown. If the tab is already active, it's a no-op.
+
+Calling `SetTabKeyBinding` again on the same index replaces the previous binding. Panics if the index is out of range.
+
+### Binding Resolution Rules
+
+- Only visible and active components' bindings are checked
+- Children are checked before their parents (most-specific wins)
+- Root container bindings are checked last (natural place for app-level shortcuts like Quit, Help)
+- The resolver checks `ResolveKeyBinding()` on each component, which looks at the component's registered bindings
+- Tab/Shift-Tab are handled before binding resolution (they always cycle focus)
+
+### key.Binding (internal)
+
+Internally, Mate uses `key.Binding` from `github.com/charmbracelet/bubbles/key` to store bindings. You generally don't need to create `key.Binding` values directly — `RegisterKeyBinding` and `BindDefaultActionToKey` accept simple strings. The main place you'll encounter `key.Binding` is when reading bindings back (e.g., `KeyBindings()`, `AllActiveKeyBindings()`) or when calling `RemoveKeyBinding`.
+
+## OnKeyPress Callback
+
+Each focusable component has an `OnKeyPress` callback that fires for keys the component doesn't handle internally:
+
+```go
+nameInput := widget.NewTextInput("name", 30)
+nameInput.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
+    // TextInput consumes all keys, so this rarely fires
+    // But for other components:
+    return nil
+})
+
+btn := widget.NewButton("ok", "OK", widget.DefaultButtonStyles())
+btn.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
+    // Fires for any key that isn't Space or Enter
+    if msg.String() == "?" {
+        return showHelp()
+    }
+    return nil
+})
+```
+
+OnKeyPress is called inside the component's `Update()` method after the component's own key handling. If OnKeyPress returns a non-nil `tea.Cmd`, the key is considered consumed.
+
+## Focus Management API
+
+The `FocusManager` is created automatically by `App` and manages focus internally. You rarely need to interact with it directly, but it's useful for understanding how focus works.
+
+### Cycling Focus
+
+```go
+cmd := fm.Next()  // move to next leaf (Tab)
+cmd := fm.Prev()  // move to previous leaf (Shift-Tab)
+```
+
+Both return `tea.Cmd` — always batch these into your update return.
+
+### Focus by ID
+
+```go
+ok, cmd := fm.FocusByID("email")
+if !ok {
+    // Component not found or not focusable/active
+}
+```
+
+### Focus First
+
+```go
+cmd := fm.FocusFirst()  // focus the first available leaf
+```
+
+### Query Focus State
+
+```go
+leaf := fm.FocusedLeaf()  // currently focused leaf, or nil
+if leaf != nil {
+    fmt.Println("Focused:", leaf.ID())
+}
+```
+
+### Get Focused Component's Registered Bindings
+
+```go
+bindings := fm.FocusedKeyBindings()  // []key.Binding registered on the focused leaf
+for _, b := range bindings {
+    h := b.Help()
+    fmt.Printf("%s: %s  ", h.Key, h.Desc)
+}
+```
+
+Only returns bindings from `RegisterKeyBinding` / `BindDefaultActionToKey`. Internal widget keys (space/enter on Button, up/down on Table) are handled in `Update()` and are not exposed through `KeyBindings()`.
+
+### Get All Active Key Bindings
+
+```go
+bindings := fm.AllActiveKeyBindings()  // registered bindings from all visible, active components
+for _, b := range bindings {
+    h := b.Help()
+    fmt.Printf("%s: %s  ", h.Key, h.Desc)
+}
+```
+
+`AllActiveKeyBindings()` walks the component tree depth-first, collecting registered bindings from every visible and active component. Hidden or disabled components (and their subtrees) are skipped. Duplicate key combinations are deduplicated (first-match wins, matching `KeyBindingResolver.Resolve` behavior).
+
+This is designed for building status bars that show global shortcuts:
+```
+ctrl+q: Quit | ctrl+n: New item | ctrl+r: Refresh
+```
+
+## Cmd Threading
+
+All focus operations return `tea.Cmd`. This is important because some components (like TextInput) return a command from `SetFocused(true)` that starts the cursor blink timer. The framework handles cmd threading automatically when you use `App` and callbacks. If you use `FocusManager` programmatically (e.g., `fm.FocusByID()` inside a callback), return the resulting `tea.Cmd` from your callback so it gets batched correctly.
+
+---
+
+# Mouse
+
+Mate supports mouse interaction through hit testing, click-to-focus, and event dispatch. Mouse support requires enabling mouse events in your Bubble Tea program.
+
+## Enabling Mouse
+
+```go
+p := tea.NewProgram(model{}, tea.WithMouseAllMotion())
+```
+
+## Mouse Event Flow
+
+The framework handles mouse routing automatically inside `BaseWindow`. The flow is:
+
+```
+Mouse event arrives at BaseWindow (internal):
+
+1. HitTest: find the leaf at (X, Y)
+   -> FocusManager walks all focusable+active leaves
+   -> Checks bounds: leaf.Position() and leaf.Size()
+   -> Returns the topmost matching leaf, or nil
+   -> If no match: DONE (nil, false)
+
+2. Focus change (left button press only)
+   -> Only on tea.MouseActionPress
+   -> If target is focusable and active: blur old leaf, focus new leaf
+   -> Returns tea.Cmd from focus change (cursor blink etc.)
+   -> If target is not focusable: DONE (nil, false)
+
+3. Dispatch MouseScrollEvent (wheel events)
+   -> If button is WheelUp/WheelDown/WheelLeft/WheelRight
+   -> target.HandleEvent(MouseScrollEvent{X, Y, Direction})
+   -> Direction: -1 for up, +1 for down
+   -> DONE (scroll events do not also fire MouseClickEvent)
+
+4. Dispatch MouseClickEvent (button press only)
+   -> Only on tea.MouseActionPress (non-wheel)
+   -> target.HandleEvent(MouseClickEvent{X, Y, Button})
+   -> Event may bubble up the parent chain
+   -> Returns (tea.Cmd, consumed)
+   -> Motion and release events do NOT dispatch MouseClickEvent
+```
+
+## Hit Testing
+
+Hit testing determines which component is at a given screen coordinate. It works because:
+
+1. Containers set their children's positions during `View()` (Panel accounts for border/padding, Field arranges children horizontally)
+2. Components store their position via `SetPosition(x, y)` and size via `SetSize(w, h)`
+3. FocusManager checks each leaf's bounds during `HitTest(x, y)`
+
+Hit testing walks the leaf list in reverse order (last-added children checked first), so overlapping components resolve to the topmost one.
+
+### Position Requirements
+
+For mouse support to work, containers must set child positions in their `View()` method. The built-in containers (Panel, Field) do this automatically. If you write a custom container, you must set positions:
+
+```go
+func (c *MyContainer) View() string {
+    px, py := c.Position()
+    yOffset := py
+    for _, child := range c.Children() {
+        if !child.Visible() { continue }
+        child.SetPosition(px, yOffset)
+        rendered := child.View()
+        child.SetSize(lipgloss.Width(rendered), lipgloss.Height(rendered))
+        yOffset += lipgloss.Height(rendered)
+    }
+    // ...
+}
+```
+
+## MouseClickEvent
+
+When a leaf receives a mouse click, `HandleEvent` is called with a `MouseClickEvent`:
+
+```go
+type MouseClickEvent struct {
+    X, Y   int              // screen coordinates of the click
+    Button tea.MouseButton  // which button was pressed
+}
+```
+
+### Default Click Behavior
+
+Each component handles clicks differently:
+
+| Component | Click Action |
+|-----------|-------------|
+| Button | Fires OnPress |
+| Toggle | Toggles on/off, fires OnChange |
+| CheckboxList | Toggles the clicked item (uses Y coordinate to determine which item) |
+| TextInput | Focus only (no specific click action) |
+| TabComponent (tab bar) | Activates the clicked tab, switches content |
+| Table | Moves cursor to the clicked row (accounts for header and scroll offset) |
+
+## MouseScrollEvent
+
+When the mouse wheel is scrolled over a leaf, `HandleEvent` is called with a `MouseScrollEvent`:
+
+```go
+type MouseScrollEvent struct {
+    X, Y      int  // screen coordinates
+    Direction int  // -1 = up, +1 = down
+}
+```
+
+### Default Scroll Behavior
+
+| Component | Scroll Action |
+|-----------|--------------|
+| Table | Moves cursor up/down by 3 rows |
+| ScrollableText | Scrolls viewport up/down by 3 lines |
+| Other components | Not consumed (bubbles to parent) |
+
+Scroll events do not change focus — the component under the cursor receives the event regardless of which component has keyboard focus.
+
+### Event Bubbling
+
+If a component's `HandleEvent` returns `consumed = false`, the event bubbles up to the parent. This continues up the tree until a component consumes it or the root is reached.
+
+```go
+// Default BaseComponent.HandleEvent: bubble to parent
+func (bc *BaseComponent) HandleEvent(event Event) (tea.Cmd, bool) {
+    if bc.parent != nil {
+        return bc.parent.HandleEvent(event)
+    }
+    return nil, false
+}
+```
+
+This means a Panel or Window can handle mouse events that no child consumed.
+
+## Popup Mouse Coordinates
+
+When a popup is displayed via the Stack, mouse coordinates are automatically adjusted. The Stack tracks the popup's overlay offset and subtracts it from mouse coordinates before routing to the popup window:
+
+```go
+// This happens automatically inside Stack.Update():
+if mouse, ok := msg.(tea.MouseMsg); ok && s.HasPopup() {
+    mouse.X -= s.popupOffset.X
+    mouse.Y -= s.popupOffset.Y
+    msg = mouse
+}
+```
+
+Components inside popups receive coordinates relative to the popup's content area, so their hit testing works correctly without any special handling.
+
+## Custom HandleEvent
+
+Override `HandleEvent` on your component to add custom mouse handling:
+
+```go
+type ClickableLabel struct {
+    widget.BaseComponent
+    text    string
+    onClick func() tea.Cmd
+}
+
+func (cl *ClickableLabel) HandleEvent(event widget.Event) (tea.Cmd, bool) {
+    if _, ok := event.(widget.MouseClickEvent); ok {
+        if cl.onClick != nil {
+            return cl.onClick(), true
+        }
+        return nil, true
+    }
+    return cl.BaseComponent.HandleEvent(event)
+}
+```
+
+Always fall through to `BaseComponent.HandleEvent` for unhandled events to preserve bubbling.
+
+---
+
+# Windows and Popups
+
+## Window
+
+`MainWindow` is the entry point for your application. Create one with `NewWindow`, add children to it, and pass it to `NewApp`.
+
+`NewWindow` defaults to `TCB` layout, which makes it easy to build apps with a tab bar on top, a main content area that fills the remaining space, and an optional status bar at the bottom.
+
+```go
+win := window.NewWindow("main")
+
+tabs := widget.NewTabComponent("tabs", widget.DefaultTabBarStyles())
+tabs.AddTab("Overview", overviewPanel)
+tabs.AddTab("Settings", settingsPanel)
+statusBar := widget.NewText("status", "Ready", lipgloss.NewStyle())
+
+win.Add(tabs, widget.TCBCenter)
+win.Add(statusBar, widget.TCBBottom)
+
+win.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
+    if msg.String() == "ctrl+q" {
+        return tea.Quit
+    }
+    return nil
+})
+```
+
+For a simpler layout, pass a layout explicitly:
+
+```go
+win := window.NewWindow("main", widget.Vertical)
+panel := widget.NewPanel("settings")
+panel.SetBorder(widget.DefaultBorder())
+panel.Add(field1, widget.Next)
+panel.Add(submitBtn, widget.Next)
+win.Add(panel, widget.Next)
+```
+
+`OnKeyPress` registers a fallthrough handler for keys that are not consumed by a registered key binding or the focused leaf. It is the right place for global application-level keys like quit.
+
+## PopupWindow
+
+`PopupWindow` is an overlay popup with a title border, Escape-to-close, and an `OnResult` callback.
+
+```go
+popup := window.NewPopupWindow("confirm", "Confirm Delete", window.DefaultPopupStyles())
+msg := widget.NewText("msg", "Delete all items?", lipgloss.NewStyle())
+popup.Add(msg, widget.Next)
+popup.OnResult(func(result any) tea.Cmd {
+    if result != nil {
+        return deleteItems()
+    }
+    return nil
+})
+```
+
+### Opening a Popup
+
+Call `ShowPopup` from any callback that has access to the window:
+
+```go
+deleteBtn.OnPress(func() tea.Cmd {
+    return win.ShowPopup(popup)
+})
+```
+
+### Closing a Popup
+
+Call `Close` from inside the popup, passing the result value:
+
+```go
+yesBtn.OnPress(func() tea.Cmd {
+    return popup.Close(true)
+})
+noBtn.OnPress(func() tea.Cmd {
+    return popup.Close(nil)  // nil = cancelled
+})
+```
+
+Pressing Escape automatically closes the popup with a `nil` result.
+
+### Full Popup Example
+
+```go
+popup := window.NewPopupWindow("confirm", "Confirm Delete", window.DefaultPopupStyles())
+
+msg := widget.NewText("msg", "Delete all items?", lipgloss.NewStyle())
+
+yesBtn := widget.NewButton("yes", "Yes", widget.DefaultPopupButtonStyles())
+noBtn := widget.NewButton("no", "No", widget.DefaultPopupButtonStyles())
+
+buttons := widget.NewPanel("buttons", widget.Horizontal)
+buttons.SetSpacing(2)
+buttons.Add(yesBtn, widget.Next)
+buttons.Add(noBtn, widget.Next)
+
+popup.Add(msg, widget.Next)
+popup.Add(buttons, widget.Next)
+
+yesBtn.OnPress(func() tea.Cmd {
+    return popup.Close(true)
+})
+noBtn.OnPress(func() tea.Cmd {
+    return popup.Close(nil)
+})
+
+popup.OnResult(func(result any) tea.Cmd {
+    if confirmed, ok := result.(bool); ok && confirmed {
+        return doDelete()
+    }
+    return nil
+})
+
+// Open it:
+deleteBtn.OnPress(func() tea.Cmd {
+    return win.ShowPopup(popup)
+})
+```
+
+## App
+
+`App` bridges `MainWindow` to Bubble Tea's `tea.Model` interface. Create one and pass it to `tea.NewProgram`:
+
+```go
+app := window.NewApp(win)
+p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseAllMotion())
+p.Run()
+```
+
+`App` handles `tea.WindowSizeMsg` internally, so you do not need to manage screen dimensions yourself.
+
+## Event Flow
+
+`BaseWindow` (embedded by both `MainWindow` and `PopupWindow`) routes events in this order:
+
+1. **Tab / Shift-Tab** — handled by `FocusManager` for focus cycling
+2. **Registered key bindings** — resolved by `KeyBindingResolver` (children-first, window last)
+3. **Focused leaf's `Update()`** — the focused widget handles the key
+4. **`OnKeyPress` callback** — fallthrough for keys not consumed by steps 1–3
+
+Mouse events are routed through hit testing: the component under the cursor receives a `MouseClickEvent`, and focus changes if the target is focusable.
+
+## Popup Lifecycle
+
+1. `win.ShowPopup(popup)` — pushes the popup, disables the base window, re-roots `FocusManager` to the popup, focuses its first leaf
+2. All events route to the popup while it is on top
+3. `popup.Close(result)` — pops the popup, re-enables the base window, restores focus, calls the `OnResult` callback with `result`
+4. Pressing Escape automatically calls `popup.Close(nil)`
+
+## Multiple Popups
+
+You can push popups from inside a popup. Each push deactivates the previous window:
+
+```go
+// From inside popup1:
+popup2 := window.NewPopupWindow("nested", "Are you sure?", window.DefaultPopupStyles())
+confirmBtn.OnPress(func() tea.Cmd {
+    return popup1.ShowPopup(popup2)
+})
+```
+
+Closing restores the previous window. The base window can never be closed this way.
+
+## Window-Level Key Bindings
+
+Use `RegisterKeyBinding` (inherited from `BaseComponent` through `BaseContainer`) for keys that should trigger actions regardless of which leaf has focus. These are resolved in step 2 of the event flow, before the focused leaf sees the key:
+
+```go
+win := window.NewWindow("main")
+
+win.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd {
+    return createItem()
+})
+```
+
+For application-level fallthrough keys (like quit), use `OnKeyPress` instead — it runs after the focused leaf has had a chance to handle the key.
+
+## Reacting to State Changes
+
+Use `OnUpdate` to react after any event changes state (focus, key bindings, etc.). This is the right place to update status bars or other reactive UI:
+
+```go
+win.OnUpdate(func() tea.Cmd {
+    // Build status hints from active key bindings
+    var parts []string
+    parts = append(parts, "Tab: focus")
+    for _, b := range win.ActiveKeyBindings() {
+        h := b.Help()
+        if h.Key != "" && h.Desc != "" {
+            parts = append(parts, h.Key+": "+h.Desc)
+        }
+    }
+    statusBar.SetText(strings.Join(parts, " | "))
+    return nil
+})
+```
+
+`ActiveKeyBindings()` returns all registered key bindings from visible, active components in the current window's tree. Bindings from disabled or hidden components are excluded.
+
+---
+
+# Styling
+
+All Mate components use [Lip Gloss](https://github.com/charmbracelet/lipgloss) for terminal styling. Styles are passed to components via constructor config structs and can be customized to create any visual theme.
+
+## Style Structs
+
+Each component type has its own styles struct. All components provide a `Default*Styles()` function that returns sensible defaults.
+
+### ButtonStyles
+
+```go
+type ButtonStyles struct {
+    Normal  lipgloss.Style  // unfocused, active
+    Focused lipgloss.Style  // focused
+}
+```
+
+Inactive buttons render with `Faint(true)` applied automatically.
+
+```go
+// Default
+styles := widget.DefaultButtonStyles()
+
+// Custom
+styles := widget.ButtonStyles{
+    Normal:  lipgloss.NewStyle().Foreground(lipgloss.Color("#4fc3f7")),
+    Focused: lipgloss.NewStyle().Foreground(lipgloss.Color("#fff")).Background(lipgloss.Color("#1565c0")).Bold(true),
+}
+
+btn := widget.NewButton("save", "Save", styles)
+```
+
+There is also `DefaultPopupButtonStyles()` which provides a dimmer style suitable for trigger buttons like `[▾]`.
+
+### ToggleStyles
+
+```go
+type ToggleStyles struct {
+    Label       lipgloss.Style  // label prefix
+    OnActive    lipgloss.Style  // on value, unfocused
+    OnFocused   lipgloss.Style  // on value, focused
+    OffActive   lipgloss.Style  // off value, unfocused
+    OffFocused  lipgloss.Style  // off value, focused
+    OffInactive lipgloss.Style  // unselected value in Radio mode
+}
+```
+
+### CheckboxListStyles
+
+```go
+type CheckboxListStyles struct {
+    Cursor    lipgloss.Style  // "> " marker on current item
+    Checked   lipgloss.Style  // "[x] " indicator
+    Unchecked lipgloss.Style  // "[ ] " indicator
+    Item      lipgloss.Style  // normal item label
+    Group     lipgloss.Style  // group header label
+    Dim       lipgloss.Style  // non-cursor item prefix ("  ")
+}
+```
+
+### TabBarStyles
+
+```go
+type TabBarStyles struct {
+    Active   lipgloss.Style  // selected tab
+    Inactive lipgloss.Style  // non-selected tab
+    Focused  lipgloss.Style  // keyboard cursor on an inactive tab
+}
+```
+
+### TableStyles
+
+```go
+type TableStyles struct {
+    Header   lipgloss.Style  // column header row
+    Selected lipgloss.Style  // selected row highlight
+    Cell     lipgloss.Style  // default cell style (when no column Renderer)
+}
+```
+
+For per-cell custom styling, use `ColumnDef.Renderer` instead of relying on `TableStyles.Cell`. See [Components - Table](components.md#table).
+
+### BorderConfig
+
+Panel borders are configured with `BorderConfig` rather than a style struct. Use `SetBorder` to apply it:
+
+```go
+// Default border (rounded, blue inactive / cyan active)
+panel.SetBorder(widget.DefaultBorder())
+
+// Custom colors
+panel.SetBorder(widget.SingleLineBorder("#444444", "#4fc3f7"))
+
+// Full control
+panel.SetBorder(widget.BorderConfig{
+    Type:        widget.RoundedBorder,
+    Color:       lipgloss.Color("#444444"),
+    ActiveColor: lipgloss.Color("#4fc3f7"),
+    Padding:     1,
+})
+```
+
+`NoBorder` (the default when `SetBorder` is not called) renders no border at all — the panel's content fills its allocated space without chrome.
+
+### CardStyles
+
+```go
+type CardStyles struct {
+    Border lipgloss.Style  // outer border
+    Title  lipgloss.Style  // title text
+    Value  lipgloss.Style  // normal value
+    Alert  lipgloss.Style  // alert value (when SetAlert(true))
+}
+```
+
+### FieldStyles
+
+```go
+type FieldStyles struct {
+    Label     lipgloss.Style  // label when no child focused
+    LabelHot  lipgloss.Style  // label when a child has focus
+    Separator lipgloss.Style  // the ": " between label and input
+}
+```
+
+## Creating a Theme
+
+Define a cohesive set of colors and apply them across all component styles:
+
+```go
+// Define your palette
+var (
+    primary   = lipgloss.Color("#4fc3f7")
+    secondary = lipgloss.Color("#81c784")
+    warning   = lipgloss.Color("#ffb74d")
+    danger    = lipgloss.Color("#ef5350")
+    text      = lipgloss.Color("#e0e0e0")
+    dimText   = lipgloss.Color("#888888")
+    bg        = lipgloss.Color("#2a2a3e")
+    highlight = lipgloss.Color("#ffeb3b")
+)
+
+// Build styles from the palette
+func myButtonStyles() widget.ButtonStyles {
+    return widget.ButtonStyles{
+        Normal:  lipgloss.NewStyle().Foreground(primary).Bold(true),
+        Focused: lipgloss.NewStyle().Foreground(highlight).Background(bg).Bold(true),
+    }
+}
+
+func myBorder() widget.BorderConfig {
+    return widget.BorderConfig{
+        Type:        widget.RoundedBorder,
+        Color:       dimText,
+        ActiveColor: primary,
+        Padding:     1,
+    }
+}
+
+func myFieldStyles() widget.FieldStyles {
+    return widget.FieldStyles{
+        Label:     lipgloss.NewStyle().Foreground(dimText),
+        LabelHot:  lipgloss.NewStyle().Foreground(highlight),
+        Separator: lipgloss.NewStyle().Foreground(dimText),
+    }
+}
+```
+
+## Inactive Rendering
+
+When a component becomes inactive (a parent is disabled), it automatically renders with `Faint(true)`. This applies to:
+- Button: faint label
+- Toggle: faint entire output
+- CheckboxList: faint entire list
+- Panel: faint the entire bordered area
+- Text: faint text
+- Card: faint the entire card
+
+You do not need to handle inactive styling yourself unless you write a custom component.
+
+## Table Cell Renderers
+
+The Table widget supports per-column custom renderers via `CellRenderer`. Renderers receive the full data source, enabling cross-column lookups (e.g., color a cell based on another column's value):
+
+```go
+columns := []widget.ColumnDef{
+    {
+        Title: "STATUS",
+        Width: 8,
+        Renderer: func(ds widget.TableDataSource, row, col int, selected bool, width int, styles widget.TableStyles) string {
+            value := ds.CellData(row, col)
+            style := styles.Cell
+            if selected {
+                style = styles.Selected.Width(width)
+            }
+            switch value {
+            case "OK":
+                style = style.Foreground(lipgloss.Color("#81c784"))
+            case "FAIL":
+                style = style.Foreground(lipgloss.Color("#ef5350")).Bold(true)
+            }
+            return style.Render(value)
+        },
+    },
+    {Title: "NAME", Width: 20},  // nil renderer = DefaultCellRenderer
+    {Title: "DETAILS", Width: 0}, // flex column
+}
+```
+
+The renderer is responsible for all styling including the selection background. Use the `width` parameter with `styles.Selected.Width(width)` to ensure the selection highlight covers the full cell width. When `Renderer` is nil, `DefaultCellRenderer` handles this automatically.
+
+## Color Profiles
+
+Lip Gloss automatically adapts colors to the terminal's color profile (TrueColor, 256-color, 16-color, or no color). You can force a profile for testing:
+
+```go
+import "github.com/muesli/termenv"
+
+lipgloss.SetColorProfile(termenv.Ascii)     // no color
+lipgloss.SetColorProfile(termenv.TrueColor) // full color
+```
+
+## Width and Sizing
+
+Components sized by the layout engine will pad their rendered output to fill the allocated width using `RenderInSize()`. This uses `lipgloss.NewStyle().Width(w).MaxWidth(w)` to ensure consistent widths regardless of content length.
+
+Use `SetPreferredWidth(w)` to give a component a fixed width hint. The `SetAlignment` method controls where content sits within the padded width: left (default), center, or right.
+
+---
+
+# API Reference
+
+Complete reference for all exported types, methods, and functions.
+
+## Package `widget`
+
+### Interfaces
+
+#### Component
+
+```go
+type Component interface {
+    ID() string
+    View() string
+    SetSize(w, h int)
+    Size() (w, h int)
+    SetPosition(x, y int)
+    Position() (x, y int)
+    Visible() bool
+    SetVisible(bool)
+    Enabled() bool
+    SetEnabled(bool)
+    Active() bool
+    Focusable() bool
+    Focused() bool
+    SetFocused(bool) tea.Cmd
+    Parent() Container
+    SetParent(Container)
+    KeyBindings() []key.Binding
+    RegisterKeyBinding(keys, description string, action func() tea.Cmd)
+    ResolveKeyBinding(tea.KeyMsg) (func() tea.Cmd, bool)
+    HandleEvent(event Event) (tea.Cmd, bool)
+    PreferredWidth() int
+    PreferredHeight() int
+    SetPreferredWidth(int)
+    SetPreferredHeight(int)
+}
+```
+
+#### Leaf
+
+```go
+type Leaf interface {
+    Component
+    Update(msg tea.KeyMsg) (tea.Cmd, bool)
+}
+```
+
+#### Container
+
+```go
+type Container interface {
+    Component
+    Children() []Component
+    AddChild(child Component)
+    InnerFocused() bool
+}
+```
+
+#### Event
+
+```go
+type Event interface{ isEvent() }
+```
+
+### Types
+
+#### Layout
+
+```go
+type Layout int
+
+const (
+    Vertical   Layout = iota // stack children top-to-bottom, natural sizes
+    Horizontal               // stack children left-to-right, natural sizes
+    TCB                      // Top-Center-Bottom: center flexes to fill remaining space
+)
+```
+
+#### Position
+
+```go
+type Position int
+
+const (
+    Next      Position = iota // sequential: append for V/H, fill next slot for TCB
+    TCBTop                    // TCB only: place in top slot
+    TCBCenter                 // TCB only: place in center slot
+    TCBBottom                 // TCB only: place in bottom slot
+)
+```
+
+#### BorderConfig
+
+```go
+type BorderConfig struct {
+    Type        BorderType     // NoBorder or RoundedBorder
+    Color       lipgloss.Color // border color when no descendant is focused
+    ActiveColor lipgloss.Color // border color when a descendant has focus
+    Padding     int            // horizontal padding inside border (columns per side)
+}
+```
+
+Constructor functions:
+
+```go
+func SingleLineBorder(color, activeColor string) BorderConfig
+func DefaultBorder() BorderConfig
+```
+
+`DefaultBorder()` returns a rounded border with a dark blue inactive color and cyan active color.
+
+#### MouseClickEvent
+
+```go
+type MouseClickEvent struct {
+    X, Y   int
+    Button tea.MouseButton
+}
+```
+
+Implements `Event`. Dispatched to components on mouse button press (not motion or release) via `HandleEvent`.
+
+#### Alignment
+
+```go
+type Alignment int
+
+const (
+    AlignLeft   Alignment = iota
+    AlignCenter
+    AlignRight
+)
+```
+
+#### ToggleMode
+
+```go
+type ToggleMode int
+
+const (
+    ToggleModeOnOff ToggleMode = iota
+    ToggleModeRadio
+)
+```
+
+#### CheckboxItem
+
+```go
+type CheckboxItem struct {
+    Label   string
+    Value   string
+    Checked bool
+    IsGroup bool
+}
+```
+
+#### TableDataSource
+
+```go
+type TableDataSource interface {
+    RowCount() int
+    CellData(row, col int) string
+}
+```
+
+#### SliceDataSource
+
+```go
+func NewSliceDataSource(data [][]string) *SliceDataSource
+```
+
+| Method | Signature |
+|--------|-----------|
+| SetData | `func(data [][]string)` |
+
+#### CellRenderer
+
+```go
+type CellRenderer func(ds TableDataSource, row, col int, selected bool, width int, styles TableStyles) string
+func DefaultCellRenderer(ds TableDataSource, row, col int, selected bool, width int, styles TableStyles) string
+```
+
+#### ColumnDef
+
+```go
+type ColumnDef struct {
+    Title    string
+    Width    int           // 0 = flex (take remaining)
+    Renderer CellRenderer  // nil = DefaultCellRenderer
+}
+```
+
+### Base Types
+
+#### BaseComponent
+
+```go
+func NewBaseComponent(id string) *BaseComponent
+```
+
+Methods: `ID`, `View`, `SetSize`, `Size`, `SetPosition`, `Position`, `Visible`, `SetVisible`, `Enabled`, `SetEnabled`, `Active`, `Focusable` (returns false), `Focused`, `SetFocused` (returns nil), `Parent`, `SetParent`, `KeyBindings` (returns only registered bindings), `RegisterKeyBinding`, `RemoveKeyBinding`, `ResolveKeyBinding`, `HandleEvent` (bubbles to parent), `SetAlignment`, `Alignment`, `RenderInSize`, `PreferredWidth`, `PreferredHeight`, `SetPreferredWidth`, `SetPreferredHeight`.
+
+#### FocusableComponent
+
+```go
+func NewFocusableComponent(id string) FocusableComponent
+```
+
+Embeds `BaseComponent`. Overrides: `Focusable()` returns true.
+
+Additional methods:
+- `OnKeyPress(fn func(tea.KeyMsg) tea.Cmd)` — set callback for unconsumed keys
+
+#### BaseContainer
+
+```go
+func NewBaseContainer(id string, self Container) *BaseContainer
+```
+
+`self` — pass the concrete container type, or nil for the default.
+
+Embeds `BaseComponent`. Overrides: `Focusable()` returns false, `View()` returns empty.
+
+Additional methods: `AddChild(child Component)`, `Children() []Component`, `InnerFocused() bool`.
+
+### Widgets
+
+#### Button
+
+```go
+func NewButton(id, label string, styles ButtonStyles) *Button
+func DefaultButtonStyles() ButtonStyles
+func DefaultPopupButtonStyles() ButtonStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| OnPress | `func(fn func() tea.Cmd)` |
+| BindDefaultActionToKey | `func(keys string, description ...string)` |
+| Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
+| View | `func() string` |
+| HandleEvent | `func(event Event) (tea.Cmd, bool)` |
+
+#### TextInput
+
+```go
+func NewTextInput(id string, inputWidth int) *TextInput
+```
+
+| Method | Signature |
+|--------|-----------|
+| WithPlaceholder | `func(p string) *TextInput` |
+| WithCharLimit | `func(n int) *TextInput` |
+| OnSubmit | `func(fn func(string) tea.Cmd)` |
+| OnChange | `func(fn func(string) tea.Cmd)` |
+| SetValue | `func(v string)` |
+| Value | `func() string` |
+| SetError | `func(e string)` |
+| Error | `func() string` |
+| SetFocused | `func(v bool) tea.Cmd` |
+| Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
+| SetSize | `func(w, h int)` |
+| View | `func() string` |
+| HandleEvent | `func(event Event) (tea.Cmd, bool)` |
+
+#### FormattedTextInput
+
+```go
+func NewFormattedTextInput(id string, inputWidth int) *FormattedTextInput
+```
+
+Embeds `TextInput`. Inherits all TextInput methods.
+
+| Method | Signature |
+|--------|-----------|
+| WithValidation | `func(fn func(string) error)` |
+| WithFormat | `func(fn func(string) string)` |
+| SetFocused | `func(focused bool) tea.Cmd` |
+
+#### Toggle
+
+```go
+func NewToggle(id, label string, initial bool, mode ToggleMode, styles ToggleStyles) *Toggle
+func DefaultToggleStyles() ToggleStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| SetLabels | `func(onLabel, offLabel string)` |
+| OnChange | `func(fn func(bool) tea.Cmd)` |
+| On | `func() bool` |
+| SetOn | `func(v bool)` |
+| BindDefaultActionToKey | `func(keys string, description ...string)` |
+| Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
+| View | `func() string` |
+| HandleEvent | `func(event Event) (tea.Cmd, bool)` |
+
+#### CheckboxList
+
+```go
+func NewCheckboxList(id string, items []CheckboxItem, styles CheckboxListStyles) *CheckboxList
+func DefaultCheckboxListStyles() CheckboxListStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| OnChange | `func(fn func([]CheckboxItem) tea.Cmd)` |
+| Items | `func() []CheckboxItem` |
+| Cursor | `func() int` |
+| Selected | `func() []string` |
+| BindDefaultActionToKey | `func(keys string, description ...string)` |
+| Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
+| View | `func() string` |
+| HandleEvent | `func(event Event) (tea.Cmd, bool)` |
+
+#### TabBar (internal to TabComponent)
+
+The `TabBar` is the focusable header component inside a `TabComponent`. Access it via `TabComponent.TabBar()` when you need to interact with it directly.
+
+```go
+func DefaultTabBarStyles() TabBarStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| OnChange | `func(fn func(int) tea.Cmd)` |
+| ActiveTab | `func() int` |
+| SetActiveTab | `func(i int)` |
+| CursorTab | `func() int` |
+
+#### Table
+
+```go
+func NewTable(id string, columns []ColumnDef, ds TableDataSource, styles TableStyles) *Table
+func DefaultTableStyles() TableStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| SetDataSource | `func(ds TableDataSource)` |
+| DataSource | `func() TableDataSource` |
+| Cursor | `func() int` |
+| SetCursor | `func(c int)` |
+| OnRowKeyPress | `func(fn func(row int, msg tea.KeyMsg) tea.Cmd)` |
+| OnRowClick | `func(fn func(row int) tea.Cmd)` |
+| Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
+| View | `func() string` |
+| HandleEvent | `func(event Event) (tea.Cmd, bool)` |
+
+#### Panel
+
+Panel is the universal container with configurable layout.
+
+```go
+func NewPanel(id string, layout ...Layout) *Panel
+```
+
+`layout` defaults to `Vertical` if omitted.
+
+| Method | Signature |
+|--------|-----------|
+| Add | `func(child Component, position Position)` |
+| SetBorder | `func(config BorderConfig)` |
+| SetTitle | `func(title string)` |
+| SetTitleStyle | `func(style lipgloss.Style)` |
+| SetSpacing | `func(spacing int)` |
+| View | `func() string` |
+
+`Add` accepts `Next` for all layouts. For `TCB` layout, also accepts `TCBTop`, `TCBCenter`, `TCBBottom`.
+`SetSpacing` sets the column gap between children in `Horizontal` layout.
+
+Embeds `BaseContainer`. Inherits: `AddChild`, `Children`, `InnerFocused`.
+
+#### Card
+
+```go
+func NewCard(id, title, value string, styles CardStyles) *Card
+func DefaultCardStyles() CardStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| SetValue | `func(value string)` |
+| Value | `func() string` |
+| SetAlert | `func(alert bool)` |
+| View | `func() string` |
+
+#### Text
+
+```go
+func NewText(id, text string, style lipgloss.Style) *Text
+```
+
+| Method | Signature |
+|--------|-----------|
+| SetText | `func(text string)` |
+| GetText | `func() string` |
+| SetStyle | `func(s lipgloss.Style)` |
+| Style | `func() lipgloss.Style` |
+| View | `func() string` |
+
+#### Field
+
+```go
+func NewField(id, labelText string, input Component, styles FieldStyles) *Field
+func DefaultFieldStyles() FieldStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| Label | `func() *Text` |
+| Separator | `func() *Text` |
+| Input | `func() Component` |
+| View | `func() string` |
+
+Embeds `BaseContainer`. Inherits: `AddChild`, `Children`, `InnerFocused`.
+
+#### ScrollableText
+
+```go
+func NewScrollableText(id string, styles ScrollableTextStyles) *ScrollableText
+func DefaultScrollableTextStyles() ScrollableTextStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| SetContent | `func(text string)` |
+| Content | `func() string` |
+| SetWrap | `func(bool)` |
+| ScrollTo | `func(line int)` |
+| ScrollTop | `func()` |
+| Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
+| View | `func() string` |
+
+#### TabComponent
+
+A container that manages tab switching using TCB layout internally: TabBar header at the top, active tab content filling remaining height.
+
+```go
+func NewTabComponent(id string, styles TabBarStyles) *TabComponent
+```
+
+| Method | Signature |
+|--------|-----------|
+| AddTab | `func(label string, content Component)` |
+| SetTabKeyBinding | `func(index int, keys string, description ...string)` |
+| ActiveTab | `func() int` |
+| SetActiveTab | `func(index int)` |
+| TabBar | `func() *TabBar` |
+| View | `func() string` |
+
+Embeds `BaseContainer`. Inherits: `AddChild`, `Children`, `InnerFocused`.
+
+---
+
+## Package `input`
+
+#### FocusManager
+
+```go
+func NewFocusManager(root widget.Container) *FocusManager
+```
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| SetRoot | `func(root widget.Container)` | Re-root to a different component tree |
+| Leaves | `func() []widget.Leaf` | All focusable, active leaves in tree order |
+| FocusedLeaf | `func() widget.Leaf` | Currently focused leaf, or nil |
+| Next | `func() tea.Cmd` | Focus next leaf (Tab) |
+| Prev | `func() tea.Cmd` | Focus previous leaf (Shift-Tab) |
+| FocusByID | `func(id string) (bool, tea.Cmd)` | Focus leaf by ID |
+| FocusFirst | `func() tea.Cmd` | Focus first available leaf |
+| HitTest | `func(x, y int) widget.Leaf` | Find leaf at screen coordinates |
+| IsFocusChangingEvent | `func(msg tea.MouseMsg) bool` | Check if mouse event should change focus |
+| CanFocusTo | `func(leaf widget.Leaf) bool` | Check if leaf can receive focus |
+| ChangeFocusTo | `func(leaf widget.Leaf) (bool, tea.Cmd)` | Blur current, focus new |
+| ResolveKeyBinding | `func(msg tea.KeyMsg) (widget.Component, func() tea.Cmd, bool)` | Check global key bindings |
+| FocusedKeyBindings | `func() []key.Binding` | Key bindings from focused leaf |
+| AllActiveKeyBindings | `func() []key.Binding` | Key bindings from all visible, active components in tree order |
+
+#### KeyBindingResolver
+
+```go
+func NewKeyBindingResolver(root widget.Container) *KeyBindingResolver
+```
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| SetRoot | `func(root widget.Container)` | Change root container |
+| Resolve | `func(msg tea.KeyMsg) (widget.Component, func() tea.Cmd, bool)` | Find matching binding in tree (children-first, root last) |
+
+---
+
+## Package `window`
+
+#### BaseWindow (internal)
+
+`BaseWindow` is embedded by `MainWindow` and `PopupWindow`. It is not instantiated directly by users.
+
+Embeds `widget.BaseContainer`. Has an internal content `Panel` with configurable layout (default `TCB`).
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| Add | `func(child widget.Component, position widget.Position)` | Place a child at the given position in the content panel |
+| OnKeyPress | `func(fn func(tea.KeyMsg) tea.Cmd)` | Fallthrough handler for unhandled keys |
+| OnUpdate | `func(fn func() tea.Cmd)` | Called after every event (focus change, key press, etc.) |
+| ActiveKeyBindings | `func() []key.Binding` | All registered key bindings from visible, active components |
+| ShowPopup | `func(popup *PopupWindow) tea.Cmd` | Push a popup onto the stack |
+| View | `func() string` | Render child components |
+
+#### MainWindow
+
+```go
+func NewWindow(id string, layout ...widget.Layout) *MainWindow
+```
+
+The main application window. Layout defaults to `TCB` if omitted. Embeds `BaseWindow`. Inherits all `BaseWindow` methods: `Add`, `OnKeyPress`, `ShowPopup`, `View`.
+
+#### PopupWindow
+
+```go
+func NewPopupWindow(id, title string, styles PopupStyles) *PopupWindow
+func DefaultPopupStyles() PopupStyles
+```
+
+An overlay popup with a title border and Escape-to-close. Embeds `BaseWindow`. Inherits: `Add`, `OnKeyPress`, `ShowPopup`, `View`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| Title | `func() string` | The popup's border title |
+| OnResult | `func(fn func(value any) tea.Cmd)` | Register result callback, called when popup closes |
+| Close | `func(result any) tea.Cmd` | Close popup and deliver result to OnResult callback |
+
+#### App
+
+```go
+func NewApp(win *MainWindow) *App
+```
+
+Bridges `MainWindow` to `tea.Model`. Handles `tea.WindowSizeMsg` internally.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| Init | `func() tea.Cmd` | Implements `tea.Model` |
+| Update | `func(msg tea.Msg) (tea.Model, tea.Cmd)` | Implements `tea.Model` |
+| View | `func() string` | Implements `tea.Model` |
+
+#### OverlayOffset
+
+```go
+type OverlayOffset struct {
+    X, Y int
+}
+```
+
+#### RenderOverlay
+
+```go
+func RenderOverlay(content, title string, width, height int) (string, OverlayOffset)
+```
+
+Renders popup content centered on a dimmed background. Returns the rendered screen and the content offset for mouse coordinate adjustment.
+
+---
+
+## Examples
+
+### main.go (tabdemo/)
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muralx/mate/widget"
+	"github.com/muralx/mate/window"
+)
+
+var (
+	colorPrimary = lipgloss.Color("#4fc3f7")
+	colorDim     = lipgloss.Color("#888888")
+	colorText    = lipgloss.Color("#e0e0e0")
+	colorAccent  = lipgloss.Color("#ce93d8")
+	colorGreen   = lipgloss.Color("#81c784")
+	colorYellow  = lipgloss.Color("#ffeb3b")
+)
+
+func main() {
+	win := window.NewWindow("main")
+
+	// --- Outer TabComponent ---
+	tabs := widget.NewTabComponent("tabs", widget.TabBarStyles{
+		Active:   lipgloss.NewStyle().Background(colorPrimary).Foreground(lipgloss.Color("#000")).Bold(true).Padding(0, 2),
+		Inactive: lipgloss.NewStyle().Foreground(colorDim).Padding(0, 2),
+		Focused:  lipgloss.NewStyle().Foreground(colorYellow).Bold(true).Padding(0, 2),
+	})
+
+	// Tab 1: Simple content with TCB panel
+	tab1 := widget.NewPanel("tab1", widget.TCB)
+	tab1.SetBorder(widget.SingleLineBorder(string(colorDim), string(colorPrimary)))
+	tab1.SetTitle("Overview")
+
+	header := widget.NewPanel("header-row", widget.Horizontal)
+	header.SetSpacing(2)
+	for _, item := range []struct{ title, value string }{
+		{"Users", "1,234"}, {"Sessions", "567"}, {"Errors", "12"}, {"Uptime", "99.9%"},
+	} {
+		card := widget.NewCard(item.title+"-card", item.title, item.value, widget.CardStyles{
+			Border: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Padding(0, 1),
+			Title:  lipgloss.NewStyle().Foreground(colorDim),
+			Value:  lipgloss.NewStyle().Foreground(colorText).Bold(true),
+			Alert:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ef5350")).Bold(true),
+		})
+		card.SetPreferredWidth(18)
+		card.SetPreferredHeight(4)
+		header.Add(card, widget.Next)
+	}
+	header.SetPreferredHeight(4)
+
+	mainContent := widget.NewText("main-content", "Main content area — this fills the remaining space", lipgloss.NewStyle().Foreground(colorText))
+
+	footer := widget.NewText("footer", "Footer: showing overview data", lipgloss.NewStyle().Foreground(colorDim))
+	footer.SetPreferredHeight(1)
+
+	tab1.Add(header, widget.TCBTop)
+	tab1.Add(mainContent, widget.TCBCenter)
+	tab1.Add(footer, widget.TCBBottom)
+
+	// Tab 2: Nested TabComponent
+	innerTabs := widget.NewTabComponent("inner-tabs", widget.TabBarStyles{
+		Active:   lipgloss.NewStyle().Background(colorAccent).Foreground(lipgloss.Color("#000")).Bold(true).Padding(0, 2),
+		Inactive: lipgloss.NewStyle().Foreground(colorDim).Padding(0, 2),
+		Focused:  lipgloss.NewStyle().Foreground(colorYellow).Bold(true).Padding(0, 2),
+	})
+
+	innerP1 := widget.NewPanel("inner-p1")
+	innerP1.SetBorder(widget.SingleLineBorder(string(colorDim), string(colorAccent)))
+	innerP1.SetTitle("Connection Settings")
+	innerP1.Add(widget.NewField("host-field", "Hostname", widget.NewTextInput("host", 30), widget.DefaultFieldStyles()), widget.Next)
+	innerP1.Add(widget.NewField("port-field", "Port", widget.NewTextInput("port", 8), widget.DefaultFieldStyles()), widget.Next)
+
+	innerP2 := widget.NewPanel("inner-p2")
+	innerP2.SetBorder(widget.SingleLineBorder(string(colorDim), string(colorAccent)))
+	innerP2.SetTitle("Authentication")
+	innerP2.Add(widget.NewField("user-field", "Username", widget.NewTextInput("user", 30), widget.DefaultFieldStyles()), widget.Next)
+	innerP2.Add(widget.NewField("pass-field", "Password", widget.NewTextInput("pass", 30), widget.DefaultFieldStyles()), widget.Next)
+
+	innerP3 := widget.NewPanel("inner-p3")
+	innerP3.SetBorder(widget.SingleLineBorder(string(colorDim), string(colorAccent)))
+	innerP3.SetTitle("Advanced")
+	innerP3.Add(widget.NewField("timeout-field", "Timeout", widget.NewTextInput("timeout", 8), widget.DefaultFieldStyles()), widget.Next)
+
+	innerTabs.AddTab("Connection", innerP1)
+	innerTabs.AddTab("Auth", innerP2)
+	innerTabs.AddTab("Advanced", innerP3)
+	innerTabs.SetTabKeyBinding(0, "ctrl+1")
+	innerTabs.SetTabKeyBinding(1, "ctrl+2")
+	innerTabs.SetTabKeyBinding(2, "ctrl+3")
+
+	// Tab 3: Simple vertical panel
+	tab3 := widget.NewPanel("tab3")
+	tab3.SetBorder(widget.SingleLineBorder(string(colorDim), string(colorGreen)))
+	tab3.SetTitle("About")
+	tab3.Add(widget.NewText("about-1", "Mate — A component framework for terminal UIs", lipgloss.NewStyle().Foreground(colorText).Bold(true)), widget.Next)
+	tab3.Add(widget.NewText("about-2", "Built on top of Bubble Tea", lipgloss.NewStyle().Foreground(colorDim)), widget.Next)
+	tab3.Add(widget.NewText("about-3", "", lipgloss.NewStyle()), widget.Next)
+	tab3.Add(widget.NewText("about-4", "This demo shows nested TabComponents, TCB layout,", lipgloss.NewStyle().Foreground(colorText)), widget.Next)
+	tab3.Add(widget.NewText("about-5", "horizontal panels, cards, and text inputs.", lipgloss.NewStyle().Foreground(colorText)), widget.Next)
+
+	tabs.AddTab("Overview", tab1)
+	tabs.AddTab("Settings", innerTabs)
+	tabs.AddTab("About", tab3)
+	tabs.SetTabKeyBinding(0, "ctrl+d")
+	tabs.SetTabKeyBinding(1, "ctrl+e")
+	tabs.SetTabKeyBinding(2, "ctrl+g")
+
+	// Status bar
+	statusBar := widget.NewText("status", "Tab: focus | ctrl+d: Overview | ctrl+e: Settings | ctrl+g: About | ctrl+q: Quit", lipgloss.NewStyle().Foreground(colorDim).Background(lipgloss.Color("#2a2a3e")))
+	statusBar.SetPreferredHeight(1)
+
+	win.Add(tabs, widget.TCBCenter)
+	win.Add(statusBar, widget.TCBBottom)
+
+	win.RegisterKeyBinding("ctrl+q", "Quit", func() tea.Cmd { return tea.Quit })
+	win.RegisterKeyBinding("ctrl+c", "", func() tea.Cmd { return tea.Quit })
+
+	app := window.NewApp(win)
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+```
+
+### main.go (uidemo/)
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muralx/mate/window"
+)
+
+func main() {
+	win := buildMainWindow()
+	app := window.NewApp(win)
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+```
+
+### main_window.go (uidemo/)
+
+```go
+package main
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muralx/mate/widget"
+	"github.com/muralx/mate/window"
+)
+
+// demoState holds references to components we need to interact with from callbacks.
+type demoState struct {
+	win       *window.MainWindow
+	tabs      *widget.TabComponent
+	statusBar *widget.Text
+
+	// Dashboard
+	cpuCard    *widget.Card
+	memCard    *widget.Card
+	diskCard   *widget.Card
+	uptimeCard *widget.Card
+	dataTable  *widget.Table
+	detailView *widget.ScrollableText
+
+	// Servers
+	serverList      *widget.CheckboxList
+	serverTable     *widget.Table
+	serverDS        *widget.SliceDataSource
+	serverData      [][]string
+	addServerBtn    *widget.Button
+	deleteServerBtn *widget.Button
+	refreshBtn      *widget.Button
+
+	// Settings
+	hostnameInput   *widget.TextInput
+	apiKeyInput     *widget.TextInput
+	refreshInterval *widget.FormattedTextInput
+	darkMode        *widget.Toggle
+	notifications   *widget.Toggle
+	autoRefresh     *widget.Toggle
+	sourceToggle    *widget.Toggle
+	saveBtn         *widget.Button
+	resetBtn        *widget.Button
+
+	// Tab panels
+	dashPanel     *widget.Panel
+	serverPanel   *widget.Panel
+	settingsPanel *widget.Panel
+
+	lastStatusMsg string
+}
+
+func buildMainWindow() *window.MainWindow {
+	s := &demoState{}
+	s.win = window.NewWindow("main") // TCB layout (default)
+
+	s.buildDashboard()
+	s.buildServers()
+	s.buildSettings()
+	s.buildStatusBar()
+
+	// TabComponent: header + content panels in one unit
+	s.tabs = widget.NewTabComponent("main-tabs", themeTabBarStyles())
+	s.tabs.AddTab("Dashboard", s.dashPanel)
+	s.tabs.AddTab("Servers", s.serverPanel)
+	s.tabs.AddTab("Settings", s.settingsPanel)
+	s.tabs.SetTabKeyBinding(0, "ctrl+d")
+	s.tabs.SetTabKeyBinding(1, "ctrl+e")
+	s.tabs.SetTabKeyBinding(2, "ctrl+g")
+
+	s.win.Add(s.tabs, widget.TCBCenter)
+	s.win.Add(s.statusBar, widget.TCBBottom)
+
+	// Global quit binding
+	s.win.RegisterKeyBinding("ctrl+q", "Quit", func() tea.Cmd { return tea.Quit })
+	s.win.RegisterKeyBinding("ctrl+c", "", func() tea.Cmd { return tea.Quit })
+
+	// Update status bar hints after every event
+	s.win.OnUpdate(func() tea.Cmd {
+		var parts []string
+		if s.lastStatusMsg != "" {
+			parts = append(parts, s.lastStatusMsg)
+		}
+		parts = append(parts, "Tab: focus")
+		for _, b := range s.win.ActiveKeyBindings() {
+			h := b.Help()
+			if h.Key != "" && h.Desc != "" {
+				parts = append(parts, h.Key+": "+h.Desc)
+			}
+		}
+		s.statusBar.SetText(strings.Join(parts, " | "))
+		return nil
+	})
+
+	return s.win
+}
+
+func (s *demoState) setStatus(msg string) {
+	s.lastStatusMsg = msg
+}
+
+func (s *demoState) clearStatus() {
+	s.lastStatusMsg = ""
+}
+
+// buildTabs and showTab are no longer needed — TabComponent handles tab switching
+
+func (s *demoState) buildStatusBar() {
+	style := lipgloss.NewStyle().Foreground(colorDim).Background(lipgloss.Color("#2a2a3e"))
+	s.statusBar = widget.NewText("status-bar", "Ready", style)
+	s.statusBar.SetPreferredHeight(1)
+}
+
+func (s *demoState) buildDashboard() {
+	s.dashPanel = widget.NewPanel("dash-panel", widget.TCB)
+	s.dashPanel.SetBorder(themeBorder())
+	s.dashPanel.SetTitle("System Overview")
+
+	// Cards in a horizontal row
+	s.cpuCard = widget.NewCard("cpu-card", "CPU", "23%", themeCardStyles())
+	s.cpuCard.SetPreferredWidth(18)
+	s.cpuCard.SetPreferredHeight(4)
+	s.memCard = widget.NewCard("mem-card", "Memory", "4.2 GB", themeCardStyles())
+	s.memCard.SetPreferredWidth(18)
+	s.memCard.SetPreferredHeight(4)
+	s.diskCard = widget.NewCard("disk-card", "Disk", "67%", themeCardStyles())
+	s.diskCard.SetPreferredWidth(18)
+	s.diskCard.SetPreferredHeight(4)
+	s.diskCard.SetAlert(true)
+	s.uptimeCard = widget.NewCard("uptime-card", "Uptime", "14d 6h", themeCardStyles())
+	s.uptimeCard.SetPreferredWidth(18)
+	s.uptimeCard.SetPreferredHeight(4)
+
+	cardRow := widget.NewPanel("card-row", widget.Horizontal)
+	cardRow.SetSpacing(1)
+	cardRow.SetPreferredHeight(4)
+	cardRow.Add(s.cpuCard, widget.Next)
+	cardRow.Add(s.memCard, widget.Next)
+	cardRow.Add(s.diskCard, widget.Next)
+	cardRow.Add(s.uptimeCard, widget.Next)
+	s.dashPanel.Add(cardRow, widget.TCBTop)
+
+	// Data table — fills center (remaining space)
+	columns := []widget.ColumnDef{
+		{Title: "TIME", Width: 12},
+		{Title: "LEVEL", Width: 7, Renderer: levelRenderer},
+		{Title: "SOURCE", Width: 15},
+		{Title: "MESSAGE", Width: 0},
+	}
+	tableDS := widget.NewSliceDataSource(generateSampleData())
+	s.dataTable = widget.NewTable("data-table", columns, tableDS, themeTableStyles())
+	s.dataTable.OnRowClick(func(row int) tea.Cmd {
+		s.showRowDetail(tableDS, row)
+		return nil
+	})
+	s.dataTable.OnRowKeyPress(func(row int, msg tea.KeyMsg) tea.Cmd {
+		if msg.String() == "enter" {
+			s.showRowDetail(tableDS, row)
+		}
+		return nil
+	})
+	tablePanel := widget.NewPanel("table-panel", widget.TCB)
+	tablePanel.SetBorder(themeBorder())
+	tablePanel.Add(s.dataTable, widget.TCBCenter)
+	s.dashPanel.Add(tablePanel, widget.TCBCenter)
+
+	// Scrollable detail area — pinned to bottom
+	s.detailView = widget.NewScrollableText("detail-view", widget.DefaultScrollableTextStyles())
+	s.detailView.SetPreferredHeight(5)
+	s.detailView.SetContent("Select a row to view details (click or Enter)")
+	s.dashPanel.Add(s.detailView, widget.TCBBottom)
+
+	// dashPanel is added to tabContent in buildMainWindow
+}
+
+func (s *demoState) showRowDetail(ds *widget.SliceDataSource, row int) {
+	t := ds.CellData(row, 0)
+	level := ds.CellData(row, 1)
+	source := ds.CellData(row, 2)
+	message := ds.CellData(row, 3)
+	detail := fmt.Sprintf("Time:    %s\nLevel:   %s\nSource:  %s\nMessage: %s", t, level, source, message)
+	s.detailView.SetContent(detail)
+	s.setStatus(fmt.Sprintf("Viewing entry from %s", t))
+}
+
+func (s *demoState) buildServers() {
+	s.serverPanel = widget.NewPanel("server-panel", widget.TCB)
+	s.serverPanel.SetBorder(themeBorder())
+	s.serverPanel.SetTitle("Server Management")
+
+	// Server list with checkboxes
+	serverListPanel := widget.NewPanel("server-list-panel")
+	serverListPanel.SetBorder(themeBorder())
+	serverListPanel.SetTitle("Servers")
+	serverListPanel.SetPreferredWidth(40)
+
+	items := []widget.CheckboxItem{
+		{Label: "--- Production ---", Value: "", IsGroup: true},
+		{Label: "web-prod-01", Value: "web-prod-01", Checked: true},
+		{Label: "web-prod-02", Value: "web-prod-02", Checked: true},
+		{Label: "api-prod-01", Value: "api-prod-01", Checked: true},
+		{Label: "--- Staging ---", Value: "", IsGroup: true},
+		{Label: "web-stg-01", Value: "web-stg-01", Checked: false},
+		{Label: "api-stg-01", Value: "api-stg-01", Checked: false},
+		{Label: "--- Development ---", Value: "", IsGroup: true},
+		{Label: "dev-01", Value: "dev-01", Checked: false},
+	}
+	s.serverList = widget.NewCheckboxList("server-list", items, themeCheckboxListStyles())
+	s.serverList.OnChange(func(items []widget.CheckboxItem) tea.Cmd {
+		selected := s.serverList.Selected()
+		s.setStatus(fmt.Sprintf("Selected %d servers", len(selected)))
+		return nil
+	})
+	serverListPanel.Add(s.serverList, widget.Next)
+	s.serverPanel.Add(serverListPanel, widget.TCBTop)
+
+	// Server details table
+	detailCols := []widget.ColumnDef{
+		{Title: "SERVER", Width: 16},
+		{Title: "STATUS", Width: 8, Renderer: statusRenderer},
+		{Title: "CPU", Width: 6},
+		{Title: "MEM", Width: 8},
+		{Title: "UPTIME", Width: 10},
+		{Title: "IP", Width: 0},
+	}
+	s.serverData = [][]string{
+		{"web-prod-01", "OK", "34%", "2.1 GB", "14d 6h", "10.0.1.10"},
+		{"web-prod-02", "OK", "28%", "1.9 GB", "14d 6h", "10.0.1.11"},
+		{"api-prod-01", "WARN", "78%", "3.8 GB", "7d 2h", "10.0.1.20"},
+		{"web-stg-01", "OK", "12%", "0.8 GB", "3d 1h", "10.0.2.10"},
+		{"api-stg-01", "FAIL", "0%", "0 GB", "0h", "10.0.2.20"},
+		{"dev-01", "OK", "45%", "1.2 GB", "1d 3h", "10.0.3.10"},
+	}
+	s.serverDS = widget.NewSliceDataSource(s.serverData)
+	s.serverTable = widget.NewTable("server-detail-table", detailCols, s.serverDS, themeTableStyles())
+	// No preferred height — center slot stretches
+	s.serverTable.OnRowClick(func(row int) tea.Cmd {
+		name := s.serverDS.CellData(row, 0)
+		status := s.serverDS.CellData(row, 1)
+		s.setStatus(fmt.Sprintf("Selected: %s (%s)", name, status))
+		return nil
+	})
+	s.serverPanel.Add(s.serverTable, widget.TCBCenter)
+
+	// Action buttons in a row
+	s.addServerBtn = widget.NewButton("add-server-btn", "+ Add Server", themeSuccessButtonStyles())
+	s.addServerBtn.OnPress(func() tea.Cmd {
+		return s.win.ShowPopup(s.buildAddServerPopup())
+	})
+	s.addServerBtn.BindDefaultActionToKey("ctrl+n", "Add server")
+
+	s.deleteServerBtn = widget.NewButton("delete-server-btn", "- Delete", themeDangerButtonStyles())
+	s.deleteServerBtn.OnPress(func() tea.Cmd {
+		selected := s.serverList.Selected()
+		if len(selected) == 0 {
+			return nil
+		}
+		return s.win.ShowPopup(s.buildConfirmPopup(
+			fmt.Sprintf("Delete %d selected server(s)?", len(selected)),
+			func() tea.Cmd {
+				s.setStatus(fmt.Sprintf("Deleted %d servers", len(selected)))
+				return nil
+			},
+		))
+	})
+
+	s.refreshBtn = widget.NewButton("refresh-btn", "Refresh", themeButtonStyles())
+	s.refreshBtn.OnPress(func() tea.Cmd {
+		s.setStatus("Refreshing server data...")
+		return nil
+	})
+	s.refreshBtn.BindDefaultActionToKey("ctrl+r", "Refresh")
+
+	btnRow := widget.NewPanel("server-btn-row", widget.Horizontal)
+	btnRow.SetSpacing(2)
+	btnRow.Add(s.addServerBtn, widget.Next)
+	btnRow.Add(s.deleteServerBtn, widget.Next)
+	btnRow.Add(s.refreshBtn, widget.Next)
+	s.serverPanel.Add(btnRow, widget.TCBBottom)
+
+	// serverPanel is added to tabContent in buildMainWindow
+}
+
+func (s *demoState) buildSettings() {
+	s.settingsPanel = widget.NewPanel("settings-panel")
+	s.settingsPanel.SetBorder(themeBorder())
+	s.settingsPanel.SetTitle("Application Settings")
+
+	// Connection sub-panel
+	connPanel := widget.NewPanel("conn-panel")
+	connPanel.SetBorder(themeBorder())
+	connPanel.SetTitle("Connection")
+	connPanel.SetPreferredHeight(8)
+
+	s.hostnameInput = widget.NewTextInput("hostname", 35)
+	s.hostnameInput.WithPlaceholder("dashboard.example.com")
+	s.hostnameInput.SetValue("dashboard.local")
+	connPanel.Add(widget.NewField("hostname-field", "Hostname", s.hostnameInput, themeFieldStyles()), widget.Next)
+
+	s.apiKeyInput = widget.NewTextInput("api-key", 35)
+	s.apiKeyInput.WithPlaceholder("sk-xxxxxxxxxxxxxxxx")
+	s.apiKeyInput.WithCharLimit(64)
+	connPanel.Add(widget.NewField("api-key-field", "API Key", s.apiKeyInput, themeFieldStyles()), widget.Next)
+
+	s.refreshInterval = widget.NewFormattedTextInput("refresh-interval", 8)
+	s.refreshInterval.WithPlaceholder("30")
+	s.refreshInterval.SetValue("30")
+	s.refreshInterval.WithValidation(func(val string) error {
+		if val == "" {
+			return nil
+		}
+		var n int
+		_, err := fmt.Sscanf(val, "%d", &n)
+		if err != nil {
+			return fmt.Errorf("must be a number")
+		}
+		if n < 5 || n > 3600 {
+			return fmt.Errorf("must be 5-3600 seconds")
+		}
+		return nil
+	})
+	connPanel.Add(widget.NewField("interval-field", "Refresh (s)", s.refreshInterval, themeFieldStyles()), widget.Next)
+
+	s.settingsPanel.Add(connPanel, widget.Next)
+
+	// Preferences sub-panel
+	togglePanel := widget.NewPanel("toggle-panel")
+	togglePanel.SetBorder(themeBorder())
+	togglePanel.SetTitle("Preferences")
+	togglePanel.SetPreferredHeight(8)
+
+	s.darkMode = widget.NewToggle("dark-mode", "Theme", true, widget.ToggleModeRadio, themeToggleStyles())
+	s.darkMode.SetLabels("[Dark]", "[Light]")
+	s.darkMode.OnChange(func(on bool) tea.Cmd {
+		if on {
+			s.setStatus("Switched to dark theme")
+		} else {
+			s.setStatus("Switched to light theme")
+		}
+		return nil
+	})
+	togglePanel.Add(widget.NewField("dark-mode-field", "Theme", s.darkMode, themeFieldStyles()), widget.Next)
+
+	s.notifications = widget.NewToggle("notifications", "Alerts", true, widget.ToggleModeOnOff, themeToggleStyles())
+	s.notifications.OnChange(func(on bool) tea.Cmd {
+		if on {
+			s.setStatus("Notifications enabled")
+		} else {
+			s.setStatus("Notifications disabled")
+		}
+		return nil
+	})
+	togglePanel.Add(widget.NewField("notif-field", "Alerts", s.notifications, themeFieldStyles()), widget.Next)
+
+	s.autoRefresh = widget.NewToggle("auto-refresh", "Auto-Refresh", true, widget.ToggleModeOnOff, themeToggleStyles())
+	s.autoRefresh.BindDefaultActionToKey("ctrl+a", "Toggle auto-refresh")
+	togglePanel.Add(widget.NewField("auto-field", "Auto-Refresh", s.autoRefresh, themeFieldStyles()), widget.Next)
+
+	s.sourceToggle = widget.NewToggle("source-toggle", "Source", false, widget.ToggleModeRadio, themeToggleStyles())
+	s.sourceToggle.SetLabels("[Remote]", "[Local]")
+	togglePanel.Add(widget.NewField("source-field", "Data Source", s.sourceToggle, themeFieldStyles()), widget.Next)
+
+	s.settingsPanel.Add(togglePanel, widget.Next)
+
+	// Buttons in a row
+	s.saveBtn = widget.NewButton("save-settings", "Save Settings", themeSuccessButtonStyles())
+	s.saveBtn.OnPress(func() tea.Cmd {
+		s.setStatus(fmt.Sprintf("Settings saved at %s", time.Now().Format("15:04:05")))
+		return nil
+	})
+	s.saveBtn.BindDefaultActionToKey("ctrl+s", "Save settings")
+
+	s.resetBtn = widget.NewButton("reset-settings", "Reset", themeDangerButtonStyles())
+	s.resetBtn.OnPress(func() tea.Cmd {
+		s.hostnameInput.SetValue("dashboard.local")
+		s.apiKeyInput.SetValue("")
+		s.refreshInterval.SetValue("30")
+		s.darkMode.SetOn(true)
+		s.notifications.SetOn(true)
+		s.autoRefresh.SetOn(true)
+		s.sourceToggle.SetOn(false)
+		s.setStatus("Settings reset to defaults")
+		return nil
+	})
+
+	settingsBtnRow := widget.NewPanel("settings-btn-row", widget.Horizontal)
+	settingsBtnRow.SetSpacing(2)
+	settingsBtnRow.Add(s.saveBtn, widget.Next)
+	settingsBtnRow.Add(s.resetBtn, widget.Next)
+	s.settingsPanel.Add(settingsBtnRow, widget.Next)
+
+	// settingsPanel is added to tabContent in buildMainWindow
+}
+
+func (s *demoState) addServerRow(name, host, port string) {
+	s.serverData = append(s.serverData, []string{name, "OK", "0%", "0 GB", "0h", host + ":" + port})
+	s.serverDS.SetData(s.serverData)
+}
+
+// Helper functions
+
+func levelRenderer(ds widget.TableDataSource, row, col int, selected bool, width int, styles widget.TableStyles) string {
+	value := ds.CellData(row, col)
+	style := styles.Cell
+	if selected {
+		style = styles.Selected.Width(width)
+	}
+	switch value {
+	case "ERROR":
+		style = style.Foreground(colorDanger).Bold(true)
+	case "WARN":
+		style = style.Foreground(colorWarning)
+	case "INFO":
+		style = style.Foreground(colorPrimary)
+	case "DEBUG":
+		style = style.Foreground(colorDim)
+	}
+	return style.Render(value)
+}
+
+func statusRenderer(ds widget.TableDataSource, row, col int, selected bool, width int, styles widget.TableStyles) string {
+	value := ds.CellData(row, col)
+	style := styles.Cell
+	if selected {
+		style = styles.Selected.Width(width)
+	}
+	switch value {
+	case "OK":
+		style = style.Foreground(colorSecondary)
+	case "WARN":
+		style = style.Foreground(colorWarning)
+	case "FAIL":
+		style = style.Foreground(colorDanger).Bold(true)
+	}
+	return style.Render(value)
+}
+
+func generateSampleData() [][]string {
+	return [][]string{
+		{"14:23:01", "INFO", "web-prod-01", "Request served: GET /api/v1/users"},
+		{"14:23:02", "DEBUG", "api-prod-01", "Cache hit for key: user:1234"},
+		{"14:23:03", "WARN", "api-prod-01", "Slow query detected: 2.3s on users table"},
+		{"14:23:04", "ERROR", "api-stg-01", "Connection refused: database unreachable"},
+		{"14:23:05", "INFO", "web-prod-02", "Health check passed"},
+		{"14:23:06", "INFO", "web-prod-01", "Request served: POST /api/v1/orders"},
+		{"14:23:07", "WARN", "web-stg-01", "TLS certificate expires in 7 days"},
+		{"14:23:08", "ERROR", "api-stg-01", "Connection refused: database unreachable"},
+		{"14:23:09", "INFO", "dev-01", "Build completed successfully"},
+		{"14:23:10", "DEBUG", "api-prod-01", "Background task completed"},
+		{"14:23:11", "INFO", "web-prod-01", "Request served: GET /api/v1/products"},
+		{"14:23:12", "WARN", "api-prod-01", "Memory usage at 78%"},
+		{"14:23:13", "INFO", "web-prod-02", "Deployed version v2.4.1"},
+		{"14:23:14", "ERROR", "dev-01", "Test suite failed: 3 assertions"},
+		{"14:23:15", "INFO", "web-prod-01", strings.Repeat("Long message ", 5)},
+	}
+}
+```
+
+### popups.go (uidemo/)
+
+```go
+package main
+
+import (
+	"fmt"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muralx/mate/widget"
+	"github.com/muralx/mate/window"
+)
+
+func (s *demoState) buildConfirmPopup(message string, onConfirm func() tea.Cmd) *window.PopupWindow {
+	popup := window.NewPopupWindow("confirm-popup", "Confirm", window.DefaultPopupStyles())
+
+	msg := widget.NewText("confirm-msg", message, lipgloss.NewStyle().Foreground(colorText).Width(40).Align(lipgloss.Center))
+
+	yesBtn := widget.NewButton("confirm-yes", "Yes", themeSuccessButtonStyles())
+	noBtn := widget.NewButton("confirm-no", "No", themeDangerButtonStyles())
+
+	yesBtn.OnPress(func() tea.Cmd {
+		return popup.Close(true)
+	})
+	noBtn.OnPress(func() tea.Cmd {
+		return popup.Close(nil)
+	})
+
+	popup.OnResult(func(result any) tea.Cmd {
+		if confirmed, ok := result.(bool); ok && confirmed {
+			return onConfirm()
+		}
+		s.setStatus("Action cancelled")
+		return nil
+	})
+
+	btnRow := widget.NewPanel("confirm-btn-row", widget.Horizontal)
+	btnRow.SetSpacing(2)
+	btnRow.Add(yesBtn, widget.Next)
+	btnRow.Add(noBtn, widget.Next)
+
+	popup.Add(msg, widget.Next)
+	popup.Add(btnRow, widget.Next)
+	return popup
+}
+
+func (s *demoState) buildAddServerPopup() *window.PopupWindow {
+	popup := window.NewPopupWindow("add-server-popup", "Add Server", window.DefaultPopupStyles())
+
+	panel := widget.NewPanel("add-server-panel")
+	panel.SetBorder(themeBorder())
+	panel.SetTitle("New Server")
+	panel.SetPreferredWidth(50)
+	panel.SetPreferredHeight(12)
+
+	nameInput := widget.NewTextInput("server-name", 30)
+	nameInput.WithPlaceholder("e.g. production-web-01")
+	panel.Add(widget.NewField("server-name-field", "Name", nameInput, themeFieldStyles()), widget.Next)
+
+	hostInput := widget.NewTextInput("server-host", 30)
+	hostInput.WithPlaceholder("e.g. 10.0.1.50")
+	panel.Add(widget.NewField("server-host-field", "Host", hostInput, themeFieldStyles()), widget.Next)
+
+	portInput := widget.NewFormattedTextInput("server-port", 8)
+	portInput.WithPlaceholder("22")
+	portInput.WithCharLimit(5)
+	portInput.WithValidation(func(val string) error {
+		if val == "" {
+			return nil
+		}
+		var port int
+		_, err := fmt.Sscanf(val, "%d", &port)
+		if err != nil {
+			return fmt.Errorf("must be a number")
+		}
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("must be 1-65535")
+		}
+		return nil
+	})
+	panel.Add(widget.NewField("server-port-field", "Port", portInput, themeFieldStyles()), widget.Next)
+
+	saveBtn := widget.NewButton("save-server", "Save", themeSuccessButtonStyles())
+	cancelBtn := widget.NewButton("cancel-server", "Cancel", themeDangerButtonStyles())
+
+	saveBtn.OnPress(func() tea.Cmd {
+		name := nameInput.Value()
+		host := hostInput.Value()
+		port := portInput.Value()
+		if name == "" || host == "" {
+			return nil
+		}
+		if port == "" {
+			port = "22"
+		}
+		return popup.Close(map[string]string{
+			"name": name, "host": host, "port": port,
+		})
+	})
+	cancelBtn.OnPress(func() tea.Cmd {
+		return popup.Close(nil)
+	})
+
+	btnRow := widget.NewPanel("add-server-btn-row", widget.Horizontal)
+	btnRow.SetSpacing(2)
+	btnRow.Add(saveBtn, widget.Next)
+	btnRow.Add(cancelBtn, widget.Next)
+	panel.Add(btnRow, widget.Next)
+
+	popup.Add(panel, widget.Next)
+
+	popup.OnResult(func(result any) tea.Cmd {
+		if data, ok := result.(map[string]string); ok {
+			s.addServerRow(data["name"], data["host"], data["port"])
+			s.setStatus(fmt.Sprintf("Added server: %s (%s:%s)", data["name"], data["host"], data["port"]))
+		} else {
+			s.setStatus("Popup cancelled")
+		}
+		return nil
+	})
+
+	return popup
+}
+```
+
+### theme.go (uidemo/)
+
+```go
+package main
+
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muralx/mate/widget"
+)
+
+// Color palette
+var (
+	colorPrimary   = lipgloss.Color("#4fc3f7")
+	colorSecondary = lipgloss.Color("#81c784")
+	colorWarning   = lipgloss.Color("#ffb74d")
+	colorDanger    = lipgloss.Color("#ef5350")
+	colorText      = lipgloss.Color("#e0e0e0")
+	colorDim       = lipgloss.Color("#888888")
+	colorBg        = lipgloss.Color("#1e1e2e")
+	colorHighlight = lipgloss.Color("#ffeb3b")
+	colorAccent    = lipgloss.Color("#ce93d8")
+)
+
+func themeBorder() widget.BorderConfig {
+	return widget.SingleLineBorder(string(colorDim), string(colorPrimary))
+}
+
+func themeFieldStyles() widget.FieldStyles {
+	return widget.FieldStyles{
+		Label:     lipgloss.NewStyle().Foreground(colorDim),
+		LabelHot:  lipgloss.NewStyle().Foreground(colorHighlight).Bold(true),
+		Separator: lipgloss.NewStyle().Foreground(colorDim),
+	}
+}
+
+func themeButtonStyles() widget.ButtonStyles {
+	return widget.ButtonStyles{
+		Normal:  lipgloss.NewStyle().Foreground(colorPrimary).Bold(true),
+		Focused: lipgloss.NewStyle().Foreground(lipgloss.Color("#000")).Background(colorPrimary).Bold(true),
+	}
+}
+
+func themeDangerButtonStyles() widget.ButtonStyles {
+	return widget.ButtonStyles{
+		Normal:  lipgloss.NewStyle().Foreground(colorDanger).Bold(true),
+		Focused: lipgloss.NewStyle().Foreground(lipgloss.Color("#000")).Background(colorDanger).Bold(true),
+	}
+}
+
+func themeSuccessButtonStyles() widget.ButtonStyles {
+	return widget.ButtonStyles{
+		Normal:  lipgloss.NewStyle().Foreground(colorSecondary).Bold(true),
+		Focused: lipgloss.NewStyle().Foreground(lipgloss.Color("#000")).Background(colorSecondary).Bold(true),
+	}
+}
+
+func themeCardStyles() widget.CardStyles {
+	return widget.CardStyles{
+		Border: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Padding(0, 1),
+		Title:  lipgloss.NewStyle().Foreground(colorDim),
+		Value:  lipgloss.NewStyle().Foreground(colorText).Bold(true),
+		Alert:  lipgloss.NewStyle().Foreground(colorDanger).Bold(true),
+	}
+}
+
+func themeTableStyles() widget.TableStyles {
+	return widget.TableStyles{
+		Header:   lipgloss.NewStyle().Foreground(colorPrimary).Bold(true),
+		Selected: lipgloss.NewStyle().Background(lipgloss.Color("#333355")),
+		Cell:     lipgloss.NewStyle().Foreground(colorText),
+	}
+}
+
+func themeTabBarStyles() widget.TabBarStyles {
+	return widget.TabBarStyles{
+		Active:   lipgloss.NewStyle().Foreground(lipgloss.Color("#000")).Background(colorPrimary).Bold(true).Padding(0, 2),
+		Inactive: lipgloss.NewStyle().Foreground(colorDim).Padding(0, 2),
+		Focused:  lipgloss.NewStyle().Foreground(colorHighlight).Padding(0, 2),
+	}
+}
+
+func themeToggleStyles() widget.ToggleStyles {
+	return widget.ToggleStyles{
+		Label:       lipgloss.NewStyle().Foreground(colorDim),
+		OnActive:    lipgloss.NewStyle().Foreground(colorSecondary).Bold(true),
+		OnFocused:   lipgloss.NewStyle().Foreground(colorHighlight).Bold(true),
+		OffActive:   lipgloss.NewStyle().Foreground(colorWarning),
+		OffFocused:  lipgloss.NewStyle().Foreground(colorHighlight).Bold(true),
+		OffInactive: lipgloss.NewStyle().Foreground(colorDim),
+	}
+}
+
+func themeCheckboxListStyles() widget.CheckboxListStyles {
+	return widget.CheckboxListStyles{
+		Cursor:    lipgloss.NewStyle().Foreground(colorHighlight).Bold(true),
+		Checked:   lipgloss.NewStyle().Foreground(colorSecondary),
+		Unchecked: lipgloss.NewStyle().Foreground(colorDim),
+		Item:      lipgloss.NewStyle().Foreground(colorText),
+		Group:     lipgloss.NewStyle().Foreground(colorAccent).Bold(true),
+		Dim:       lipgloss.NewStyle().Foreground(colorDim),
+	}
+}
+```
+

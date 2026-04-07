@@ -25,10 +25,10 @@ Tab cycles through leaves in this order. Shift-Tab cycles in reverse.
 
 ## Keyboard Event Flow
 
-When a key arrives at your window's `Update()`, delegate to `BaseWindow.HandleKey()`. The flow is:
+The framework handles all keyboard routing automatically inside `BaseWindow`. The flow is:
 
 ```
-Key arrives at BaseWindow.HandleKey(msg, fm):
+Key arrives at BaseWindow (internal):
 
 1. Tab / Shift-Tab
    -> FocusManager.Next() / Prev()
@@ -47,29 +47,31 @@ Key arrives at BaseWindow.HandleKey(msg, fm):
    -> Component may call its OnKeyPress callback for unconsumed keys
    -> Returns (tea.Cmd, consumed bool)
    -> DONE
+
+4. Window OnKeyPress callback
+   -> Fallthrough for keys not consumed by steps 1-3
+   -> DONE
 ```
 
 ### Window-Level Keys
 
-Handle window-specific keys (Esc, Ctrl+C, etc.) in your window's `Update()` **before** calling `HandleKey()`:
+Use `RegisterKeyBinding` for global shortcuts that should fire before the focused leaf sees the key. Use `OnKeyPress` for fallthrough keys that should only fire if nothing else consumed them:
 
 ```go
-func (w *MyWindow) Update(msg tea.Msg, fm *input.FocusManager) (tea.Cmd, *window.Result) {
-    switch msg := msg.(type) {
-    case tea.KeyMsg:
-        // Window-level shortcuts first
-        switch msg.String() {
-        case "ctrl+c":
-            return tea.Quit, nil
-        case "esc":
-            return nil, &window.Result{Value: "cancelled"}
-        }
-        // Standard routing
-        cmd, _ := w.HandleKey(msg, fm)
-        return cmd, nil
+win := window.NewWindow("main")
+
+// Global shortcut — fires before focused leaf (step 2)
+win.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd {
+    return createItem()
+})
+
+// Fallthrough — fires after focused leaf (step 4)
+win.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
+    if msg.String() == "ctrl+c" {
+        return tea.Quit
     }
-    return nil, nil
-}
+    return nil
+})
 ```
 
 ## Global Key Bindings
@@ -81,18 +83,18 @@ Register key bindings on any component. The KeyBindingResolver checks these befo
 Register a custom action for a key on any component:
 
 ```go
-// On a window (BaseWindow embeds BaseContainer which embeds BaseComponent)
-w.RegisterKeyBinding(
-    key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "Quit")),
-    func() tea.Cmd { return tea.Quit },
-)
+// On a window
+win.RegisterKeyBinding("ctrl+x", "Quit", func() tea.Cmd {
+    return tea.Quit
+})
 
 // On any component
-panel.RegisterKeyBinding(
-    key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "New")),
-    func() tea.Cmd { return createNew() },
-)
+panel.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd {
+    return createNew()
+})
 ```
+
+The first argument is the key combination (e.g., `"ctrl+s"`, `"space"`, `"enter"`). The second is a description used for help text display (pass `""` to hide from status bars).
 
 ### BindDefaultActionToKey
 
@@ -101,29 +103,19 @@ For interactive components, bind a global shortcut to the component's default ac
 ```go
 // Button: shortcut triggers OnPress
 saveBtn.OnPress(func() tea.Cmd { return save() })
-saveBtn.BindDefaultActionToKey(key.NewBinding(
-    key.WithKeys("ctrl+s"),
-    key.WithHelp("ctrl+s", "Save"),
-))
+saveBtn.BindDefaultActionToKey("ctrl+s", "Save")
 
 // Toggle: shortcut toggles on/off
-toggle.BindDefaultActionToKey(key.NewBinding(
-    key.WithKeys("ctrl+g"),
-    key.WithHelp("ctrl+g", "Toggle option"),
-))
+toggle.BindDefaultActionToKey("ctrl+g", "Toggle option")
 
 // CheckboxList: shortcut toggles the item at cursor
-nodeList.BindDefaultActionToKey(key.NewBinding(
-    key.WithKeys("ctrl+a"),
-    key.WithHelp("ctrl+a", "Toggle all"),
-))
+nodeList.BindDefaultActionToKey("ctrl+a", "Toggle all")
 
 // TabBar: shortcut activates the tab at cursor
-tabs.BindDefaultActionToKey(key.NewBinding(
-    key.WithKeys("ctrl+t"),
-    key.WithHelp("ctrl+t", "Switch tab"),
-))
+tabs.BindDefaultActionToKey("ctrl+t", "Switch tab")
 ```
+
+The description is optional — if omitted, it defaults to the component's label.
 
 `BindDefaultActionToKey` is available on: **Button**, **Toggle**, **CheckboxList**, **TabBar**.
 
@@ -133,31 +125,35 @@ When the shortcut is pressed:
 
 ### RemoveKeyBinding
 
-Remove a previously registered key binding:
+Remove a previously registered key binding. Pass a `key.Binding` that matches the key combination to remove:
 
 ```go
-binding := key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "New"))
-panel.RegisterKeyBinding(binding, func() tea.Cmd { return createNew() })
+import "github.com/charmbracelet/bubbles/key"
 
-// Later, remove it
-panel.RemoveKeyBinding(binding)
+panel.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd { return createNew() })
+
+// Later, remove it by matching the key
+panel.RemoveKeyBinding(key.NewBinding(key.WithKeys("ctrl+n")))
 ```
 
-Matches by key combination (the `Keys()` on the binding). No-op if the binding is not found.
+Matches by key combination. No-op if the binding is not found.
 
-### TabBar Per-Tab Accelerators
+### TabComponent Per-Tab Accelerators
 
 Bind keyboard shortcuts to activate specific tabs by index:
 
 ```go
-tabs := widget.NewTabBar("tabs", []string{"Overview", "Details", "Settings"}, widget.DefaultTabBarStyles())
+tabs := widget.NewTabComponent("tabs", widget.DefaultTabBarStyles())
+tabs.AddTab("Overview", overviewPanel)
+tabs.AddTab("Details", detailsPanel)
+tabs.AddTab("Settings", settingsPanel)
 
 tabs.SetTabKeyBinding(0, "ctrl+d")                // help desc defaults to "Overview"
 tabs.SetTabKeyBinding(1, "ctrl+e")                // help desc defaults to "Details"
 tabs.SetTabKeyBinding(2, "ctrl+g", "Settings")    // explicit help description
 ```
 
-When the shortcut fires, the tab is activated directly (no cursor movement needed). `OnChange` fires as normal. If the tab is already active, it's a no-op.
+When the shortcut fires, the tab activates and the corresponding content panel is shown. If the tab is already active, it's a no-op.
 
 Calling `SetTabKeyBinding` again on the same index replaces the previous binding. Panics if the index is out of range.
 
@@ -169,26 +165,9 @@ Calling `SetTabKeyBinding` again on the same index replaces the previous binding
 - The resolver checks `ResolveKeyBinding()` on each component, which looks at the component's registered bindings
 - Tab/Shift-Tab are handled before binding resolution (they always cycle focus)
 
-### key.Binding
+### key.Binding (internal)
 
-Mate uses `key.Binding` from `github.com/charmbracelet/bubbles/key`:
-
-```go
-import "github.com/charmbracelet/bubbles/key"
-
-// Multiple keys for one binding
-binding := key.NewBinding(
-    key.WithKeys("ctrl+s", "f5"),
-    key.WithHelp("ctrl+s/f5", "Save"),
-)
-
-// Disable a binding at runtime
-binding.SetEnabled(false)
-
-// Check help text
-h := binding.Help()
-fmt.Println(h.Key, h.Desc) // "ctrl+s/f5", "Save"
-```
+Internally, Mate uses `key.Binding` from `github.com/charmbracelet/bubbles/key` to store bindings. You generally don't need to create `key.Binding` values directly — `RegisterKeyBinding` and `BindDefaultActionToKey` accept simple strings. The main place you'll encounter `key.Binding` is when reading bindings back (e.g., `KeyBindings()`, `AllActiveKeyBindings()`) or when calling `RemoveKeyBinding`.
 
 ## OnKeyPress Callback
 
@@ -216,7 +195,7 @@ OnKeyPress is called inside the component's `Update()` method after the componen
 
 ## Focus Management API
 
-The `FocusManager` is provided to your window's `Update()` method. You can use it for programmatic focus control.
+The `FocusManager` is created automatically by `App` and manages focus internally. You rarely need to interact with it directly, but it's useful for understanding how focus works.
 
 ### Cycling Focus
 
@@ -282,16 +261,4 @@ ctrl+q: Quit | ctrl+n: New item | ctrl+r: Refresh
 
 ## Cmd Threading
 
-All focus operations return `tea.Cmd`. This is important because some components (like TextInput) return a command from `SetFocused(true)` that starts the cursor blink timer. If you discard these commands, the cursor won't blink.
-
-```go
-// Good: return the cmd from HandleKey
-cmd, _ := w.HandleKey(msg, fm)
-return cmd, nil
-
-// Bad: discard the cmd
-w.HandleKey(msg, fm)
-return nil, nil  // cursor blink may not start
-```
-
-The same applies to `fm.Next()`, `fm.Prev()`, `fm.FocusByID()`, and `fm.FocusFirst()` — always return their commands.
+All focus operations return `tea.Cmd`. This is important because some components (like TextInput) return a command from `SetFocused(true)` that starts the cursor blink timer. The framework handles cmd threading automatically when you use `App` and callbacks. If you use `FocusManager` programmatically (e.g., `fm.FocusByID()` inside a callback), return the resulting `tea.Cmd` from your callback so it gets batched correctly.

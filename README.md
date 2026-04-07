@@ -57,7 +57,7 @@ func main() {
 
 ## Features
 
-**Components** — Button, TextInput, Toggle, CheckboxList, TabBar, TabComponent, Table, ScrollableText, Card, Text
+**Components** — Button, TextInput, Toggle, CheckboxList, TabComponent, Table, ScrollableText, Card, Text, Field
 
 **Layouts** — Panel supports Vertical (stack top-to-bottom), Horizontal (stack left-to-right), and TCB (Top-Center-Bottom, center flexes to fill space)
 

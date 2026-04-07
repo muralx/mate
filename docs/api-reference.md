@@ -27,7 +27,7 @@ type Component interface {
     Parent() Container
     SetParent(Container)
     KeyBindings() []key.Binding
-    RegisterKeyBinding(key.Binding, func() tea.Cmd)
+    RegisterKeyBinding(keys, description string, action func() tea.Cmd)
     ResolveKeyBinding(tea.KeyMsg) (func() tea.Cmd, bool)
     HandleEvent(event Event) (tea.Cmd, bool)
     PreferredWidth() int
@@ -237,7 +237,7 @@ func DefaultPopupButtonStyles() ButtonStyles
 | Method | Signature |
 |--------|-----------|
 | OnPress | `func(fn func() tea.Cmd)` |
-| BindDefaultActionToKey | `func(binding key.Binding)` |
+| BindDefaultActionToKey | `func(keys string, description ...string)` |
 | Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
 | View | `func() string` |
 | HandleEvent | `func(event Event) (tea.Cmd, bool)` |
@@ -291,7 +291,7 @@ func DefaultToggleStyles() ToggleStyles
 | OnChange | `func(fn func(bool) tea.Cmd)` |
 | On | `func() bool` |
 | SetOn | `func(v bool)` |
-| BindDefaultActionToKey | `func(binding key.Binding)` |
+| BindDefaultActionToKey | `func(keys string, description ...string)` |
 | Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
 | View | `func() string` |
 | HandleEvent | `func(event Event) (tea.Cmd, bool)` |
@@ -309,15 +309,16 @@ func DefaultCheckboxListStyles() CheckboxListStyles
 | Items | `func() []CheckboxItem` |
 | Cursor | `func() int` |
 | Selected | `func() []string` |
-| BindDefaultActionToKey | `func(binding key.Binding)` |
+| BindDefaultActionToKey | `func(keys string, description ...string)` |
 | Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
 | View | `func() string` |
 | HandleEvent | `func(event Event) (tea.Cmd, bool)` |
 
-#### TabBar
+#### TabBar (internal to TabComponent)
+
+The `TabBar` is the focusable header component inside a `TabComponent`. Access it via `TabComponent.TabBar()` when you need to interact with it directly.
 
 ```go
-func NewTabBar(id string, labels []string, styles TabBarStyles) *TabBar
 func DefaultTabBarStyles() TabBarStyles
 ```
 
@@ -327,12 +328,6 @@ func DefaultTabBarStyles() TabBarStyles
 | ActiveTab | `func() int` |
 | SetActiveTab | `func(i int)` |
 | CursorTab | `func() int` |
-| SetTabKeyBinding | `func(index int, keys string, description ...string)` |
-| BindDefaultActionToKey | `func(binding key.Binding)` |
-| SetFocused | `func(v bool) tea.Cmd` |
-| Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
-| View | `func() string` |
-| HandleEvent | `func(event Event) (tea.Cmd, bool)` |
 
 #### Table
 

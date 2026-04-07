@@ -59,12 +59,12 @@ toolbar.Add(statusText, widget.Next)
 // TCB layout — center fills remaining height
 win := window.NewWindow("main") // Window defaults to TCB
 
-tabBar := widget.NewTabBar("tabs", []string{"Overview", "Settings"}, widget.DefaultTabBarStyles())
-contentPanel := widget.NewPanel("content")
+tabs := widget.NewTabComponent("tabs", widget.DefaultTabBarStyles())
+tabs.AddTab("Overview", overviewPanel)
+tabs.AddTab("Settings", settingsPanel)
 statusBar := widget.NewText("status", "Ready", lipgloss.NewStyle())
 
-win.Add(tabBar, widget.TCBTop)
-win.Add(contentPanel, widget.TCBCenter)
+win.Add(tabs, widget.TCBCenter)
 win.Add(statusBar, widget.TCBBottom)
 ```
 

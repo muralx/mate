@@ -27,8 +27,8 @@ Every Mate application is a tree of components. There are three kinds:
 
 | Kind | Can receive focus? | Has children? | Examples |
 |------|-------------------|---------------|----------|
-| **Leaf** | Yes | No | Button, TextInput, Toggle, CheckboxList, TabBar, Table |
-| **Container** | No | Yes | Panel, Field |
+| **Leaf** | Yes | No | Button, TextInput, Toggle, CheckboxList, Table, ScrollableText |
+| **Container** | No | Yes | Panel, Field, TabComponent |
 | **Display** | No | No | Text, Card |
 
 Containers hold children. Leaves handle keyboard input. Display components just render.
@@ -72,7 +72,7 @@ type Component interface {
     Parent() Container
     SetParent(Container)
     KeyBindings() []key.Binding
-    RegisterKeyBinding(key.Binding, func() tea.Cmd)
+    RegisterKeyBinding(keys, description string, action func() tea.Cmd)
     ResolveKeyBinding(tea.KeyMsg) (func() tea.Cmd, bool)
     HandleEvent(event Event) (tea.Cmd, bool)
     PreferredWidth() int

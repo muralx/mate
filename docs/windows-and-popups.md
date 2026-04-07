@@ -9,12 +9,12 @@
 ```go
 win := window.NewWindow("main")
 
-tabBar := widget.NewTabBar("tabs", []string{"Overview", "Settings"}, widget.DefaultTabBarStyles())
-contentPanel := widget.NewPanel("content")
+tabs := widget.NewTabComponent("tabs", widget.DefaultTabBarStyles())
+tabs.AddTab("Overview", overviewPanel)
+tabs.AddTab("Settings", settingsPanel)
 statusBar := widget.NewText("status", "Ready", lipgloss.NewStyle())
 
-win.Add(tabBar, widget.TCBTop)
-win.Add(contentPanel, widget.TCBCenter)
+win.Add(tabs, widget.TCBCenter)
 win.Add(statusBar, widget.TCBBottom)
 
 win.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
@@ -168,10 +168,9 @@ Use `RegisterKeyBinding` (inherited from `BaseComponent` through `BaseContainer`
 ```go
 win := window.NewWindow("main")
 
-win.RegisterKeyBinding(
-    key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "New")),
-    func() tea.Cmd { return createItem() },
-)
+win.RegisterKeyBinding("ctrl+n", "New", func() tea.Cmd {
+    return createItem()
+})
 ```
 
 For application-level fallthrough keys (like quit), use `OnKeyPress` instead — it runs after the focused leaf has had a chance to handle the key.
