@@ -240,7 +240,9 @@ func (st *ScrollableText) View() string {
 	content := strings.Join(visible, "\n")
 
 	if !st.Active() {
-		return lipgloss.NewStyle().Faint(true).Width(st.width).Height(st.height).Render(content)
+		// Strip inner ANSI so the Faint(true) treatment actually applies —
+		// inner SGR codes would otherwise override the faint style.
+		return lipgloss.NewStyle().Faint(true).Width(st.width).Height(st.height).Render(ansi.Strip(content))
 	}
 
 	return style.Width(st.width).Height(st.height).Render(content)

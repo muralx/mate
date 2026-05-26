@@ -372,6 +372,21 @@ func TestScrollableText_View_Inactive(t *testing.T) {
 	}
 }
 
+func TestScrollableText_View_Inactive_StripsANSI(t *testing.T) {
+	st := NewScrollableText("st", DefaultScrollableTextStyles())
+	st.SetSize(40, 3)
+	// Content contains a hard-coded ANSI color sequence.
+	st.SetContent("\x1b[31mred text\x1b[0m")
+	st.SetEnabled(false)
+	out := st.View()
+	if strings.Contains(out, "\x1b[31m") {
+		t.Errorf("inactive view should not contain inner ANSI color codes, got %q", out)
+	}
+	if !strings.Contains(out, "red text") {
+		t.Errorf("inactive view should still contain the visible text, got %q", out)
+	}
+}
+
 func TestScrollableText_FocusedStyle(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
