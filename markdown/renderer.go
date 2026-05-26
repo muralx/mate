@@ -75,7 +75,51 @@ func (r *Renderer) Render(md string, maxWidth int) string {
 			out = append(out, r.styles.H1.Render(rest))
 			continue
 		}
-		out = append(out, line)
+
+		out = append(out, r.renderInline(line))
 	}
 	return strings.Join(out, "\n")
+}
+
+// renderInline tokenizes one line of inline markdown in a single
+// left-to-right pass, handling code spans and bold. Doing it in one
+// pass (rather than two sequential string scans) keeps later patterns
+// from looking inside earlier ones — e.g., the `**` inside a code span
+// is skipped over because we jump past the closing backtick before
+// scanning for bold markers.
+func (r *Renderer) renderInline(line string) string {
+	var sb strings.Builder
+	sb.Grow(len(line))
+	i := 0
+	for i < len(line) {
+		// Inline code: `...`
+		if line[i] == '`' {
+			end := strings.Index(line[i+1:], "`")
+			if end < 0 {
+				sb.WriteByte(line[i])
+				i++
+				continue
+			}
+			end += i + 1
+			sb.WriteString(r.styles.Code.Render(line[i+1 : end]))
+			i = end + 1
+			continue
+		}
+		// Bold: **...**
+		if i+1 < len(line) && line[i] == '*' && line[i+1] == '*' {
+			end := strings.Index(line[i+2:], "**")
+			if end < 0 {
+				sb.WriteByte(line[i])
+				i++
+				continue
+			}
+			end += i + 2
+			sb.WriteString(r.styles.Bold.Render(line[i+2 : end]))
+			i = end + 2
+			continue
+		}
+		sb.WriteByte(line[i])
+		i++
+	}
+	return sb.String()
 }

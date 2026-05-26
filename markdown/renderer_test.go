@@ -66,3 +66,32 @@ func TestRender_HeadingPrefixPriority(t *testing.T) {
 		t.Errorf("longer heading prefix not stripped first: visible = %q, want %q", visible, "x")
 	}
 }
+
+func TestRender_Bold(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	out := r.Render("hello **world** end", 0)
+	if visible := ansi.Strip(out); visible != "hello world end" {
+		t.Errorf("visible text = %q, want %q", visible, "hello world end")
+	}
+	if !strings.Contains(out, "\x1b[") {
+		t.Errorf("bold output missing ANSI styling: %q", out)
+	}
+}
+
+func TestRender_InlineCode(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	out := r.Render("call `foo()` here", 0)
+	if visible := ansi.Strip(out); visible != "call foo() here" {
+		t.Errorf("visible text = %q, want %q", visible, "call foo() here")
+	}
+}
+
+// Pass order: code spans must be processed BEFORE bold. A backticked
+// span containing literal ** must NOT be bolded.
+func TestRender_PassOrder_CodeBeforeBold(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	out := r.Render("`**not bold**` and **bold**", 0)
+	if visible := ansi.Strip(out); visible != "**not bold** and bold" {
+		t.Errorf("visible text = %q, want %q", visible, "**not bold** and bold")
+	}
+}
