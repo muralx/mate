@@ -110,29 +110,23 @@ func (st *ScrollableText) getLines() []string {
 		return st.lines
 	}
 
-	// Wrap long lines
+	// Wrap long lines. ansi.Wrap is ANSI-safe and word-aware on the
+	// supplied breakpoints (spaces, tabs, dashes); it emits a string
+	// with newlines inserted at width boundaries that we split back
+	// into display lines.
+	//
+	// (The previous Truncate-then-byte-advance loop split mid-CSI when
+	// Truncate appended a reset that wasn't present in the input,
+	// producing visible escape-sequence fragments like ";2;206;145;120m"
+	// in styled markdown.)
 	var wrapped []string
 	for _, line := range rawLines {
-		lineWidth := lipgloss.Width(line)
-		if lineWidth <= st.width {
+		if lipgloss.Width(line) <= st.width {
 			wrapped = append(wrapped, line)
 			continue
 		}
-		// Word-wrap by splitting at width boundaries (ANSI-aware)
-		for lipgloss.Width(line) > st.width {
-			cut := ansi.Truncate(line, st.width, "")
-			wrapped = append(wrapped, cut)
-			// Remove the truncated portion — use the visual width of what was cut
-			cutLen := len(cut)
-			if cutLen >= len(line) {
-				line = ""
-			} else {
-				line = line[cutLen:]
-			}
-		}
-		if len(line) > 0 {
-			wrapped = append(wrapped, line)
-		}
+		w := ansi.Wrap(line, st.width, " \t-")
+		wrapped = append(wrapped, strings.Split(w, "\n")...)
 	}
 	st.lines = wrapped
 	return st.lines
