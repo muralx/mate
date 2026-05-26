@@ -7,7 +7,11 @@
 // this naive parser), images, escapes.
 package markdown
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Styles holds the per-element lipgloss styles used by Renderer.
 type Styles struct {
@@ -55,5 +59,23 @@ func (r *Renderer) Render(md string, maxWidth int) string {
 	if md == "" {
 		return ""
 	}
-	return md
+	lines := strings.Split(md, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// Headings: longest prefix first.
+		if rest, ok := strings.CutPrefix(line, "### "); ok {
+			out = append(out, r.styles.H3.Render(rest))
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "## "); ok {
+			out = append(out, r.styles.H2.Render(rest))
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "# "); ok {
+			out = append(out, r.styles.H1.Render(rest))
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
