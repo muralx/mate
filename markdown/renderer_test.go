@@ -95,3 +95,43 @@ func TestRender_PassOrder_CodeBeforeBold(t *testing.T) {
 		t.Errorf("visible text = %q, want %q", visible, "**not bold** and bold")
 	}
 }
+
+func TestRender_CodeBlock(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	md := "```\nfoo\nbar\n```"
+	out := r.Render(md, 0)
+	if visible := ansi.Strip(out); visible != "foo\nbar" {
+		t.Errorf("visible = %q, want %q", visible, "foo\nbar")
+	}
+}
+
+func TestRender_CodeBlockTabsExpanded(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	out := r.Render("```\n\tfoo\n```", 0)
+	if visible := ansi.Strip(out); visible != "    foo" {
+		t.Errorf("tab expansion: visible = %q, want %q", visible, "    foo")
+	}
+}
+
+func TestRender_HorizontalRule(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	for _, marker := range []string{"---", "***", "___"} {
+		out := r.Render(marker, 0)
+		if !strings.Contains(ansi.Strip(out), "─") {
+			t.Errorf("HR marker %q did not render: %q", marker, out)
+		}
+	}
+}
+
+func TestRender_TablePassthrough(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	md := "| a | b |\n|---|---|\n| 1 | 2 |"
+	out := r.Render(md, 0)
+	visible := ansi.Strip(out)
+	if !strings.Contains(visible, "| a | b |") || !strings.Contains(visible, "| 1 | 2 |") {
+		t.Errorf("table rows missing: %q", visible)
+	}
+	if strings.Contains(visible, "|---|---|") {
+		t.Errorf("table separator should be stripped: %q", visible)
+	}
+}

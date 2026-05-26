@@ -61,7 +61,18 @@ func (r *Renderer) Render(md string, maxWidth int) string {
 	}
 	lines := strings.Split(md, "\n")
 	out := make([]string, 0, len(lines))
+	inCodeBlock := false
 	for _, line := range lines {
+		if strings.HasPrefix(line, "```") {
+			inCodeBlock = !inCodeBlock
+			continue
+		}
+		if inCodeBlock {
+			expanded := strings.ReplaceAll(line, "\t", "    ")
+			out = append(out, r.styles.CodeBlock.Render(expanded))
+			continue
+		}
+
 		// Headings: longest prefix first.
 		if rest, ok := strings.CutPrefix(line, "### "); ok {
 			out = append(out, r.styles.H3.Render(rest))
@@ -76,9 +87,42 @@ func (r *Renderer) Render(md string, maxWidth int) string {
 			continue
 		}
 
+		// Horizontal rules.
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+			out = append(out, strings.Repeat("─", 60))
+			continue
+		}
+
+		// Table separator — strip.
+		if isTableSeparator(line) {
+			continue
+		}
+
+		// Table rows — pass through with tab expansion.
+		if strings.HasPrefix(strings.TrimSpace(line), "|") {
+			out = append(out, strings.ReplaceAll(line, "\t", "    "))
+			continue
+		}
+
+		// Tab expansion before inline processing.
+		line = strings.ReplaceAll(line, "\t", "    ")
 		out = append(out, r.renderInline(line))
 	}
 	return strings.Join(out, "\n")
+}
+
+// isTableSeparator reports whether line is a markdown table separator
+// row (only `|`, `-`, `:`, and whitespace).
+func isTableSeparator(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") {
+		return false
+	}
+	cleaned := strings.ReplaceAll(trimmed, "|", "")
+	cleaned = strings.ReplaceAll(cleaned, "-", "")
+	cleaned = strings.ReplaceAll(cleaned, ":", "")
+	return strings.TrimSpace(cleaned) == ""
 }
 
 // renderInline tokenizes one line of inline markdown in a single
