@@ -107,9 +107,20 @@ func (r *Renderer) Render(md string, maxWidth int) string {
 
 		// Tab expansion before inline processing.
 		line = strings.ReplaceAll(line, "\t", "    ")
-		out = append(out, r.renderInline(line))
+		out = append(out, r.renderInlineLine(line, maxWidth))
 	}
 	return strings.Join(out, "\n")
+}
+
+// renderInlineLine renders one line with OSC 8 hyperlinks, falling
+// back to plain styled link text when the visible width would exceed
+// maxWidth (OSC 8 across wrapped lines is fragile in some terminals).
+func (r *Renderer) renderInlineLine(line string, maxWidth int) string {
+	osc8 := r.renderInline(line, true)
+	if maxWidth > 0 && lipgloss.Width(osc8) > maxWidth {
+		return r.renderInline(line, false)
+	}
+	return osc8
 }
 
 // isTableSeparator reports whether line is a markdown table separator
@@ -126,12 +137,13 @@ func isTableSeparator(line string) bool {
 }
 
 // renderInline tokenizes one line of inline markdown in a single
-// left-to-right pass, handling code spans and bold. Doing it in one
-// pass (rather than two sequential string scans) keeps later patterns
-// from looking inside earlier ones — e.g., the `**` inside a code span
-// is skipped over because we jump past the closing backtick before
-// scanning for bold markers.
-func (r *Renderer) renderInline(line string) string {
+// left-to-right pass, handling code spans, bold, and links. Doing it
+// in one pass (rather than sequential string scans) keeps later
+// patterns from looking inside earlier ones — e.g., the `**` inside
+// a code span is skipped because we jump past the closing backtick
+// before scanning for bold markers. With osc8=false, links render as
+// plain styled text (used by the per-line fallback in renderInlineLine).
+func (r *Renderer) renderInline(line string, osc8 bool) string {
 	var sb strings.Builder
 	sb.Grow(len(line))
 	i := 0
@@ -162,8 +174,41 @@ func (r *Renderer) renderInline(line string) string {
 			i = end + 2
 			continue
 		}
+		// Link: [text](url)
+		if line[i] == '[' {
+			closeBracket := strings.Index(line[i+1:], "](")
+			if closeBracket < 0 {
+				sb.WriteByte(line[i])
+				i++
+				continue
+			}
+			urlStart := i + 1 + closeBracket + 2
+			urlLen := strings.Index(line[urlStart:], ")")
+			if urlLen < 0 {
+				sb.WriteByte(line[i])
+				i++
+				continue
+			}
+			text := line[i+1 : i+1+closeBracket]
+			url := line[urlStart : urlStart+urlLen]
+			styled := r.styles.Link.Render(text)
+			if osc8 {
+				styled = osc8Link(styled, url)
+			}
+			sb.WriteString(styled)
+			i = urlStart + urlLen + 1
+			continue
+		}
 		sb.WriteByte(line[i])
 		i++
 	}
 	return sb.String()
+}
+
+// osc8Link wraps text in an OSC 8 terminal hyperlink that opens url
+// on click. Uses BEL (\x07) as the OSC terminator — more widely
+// supported than ST (\x1b\\), especially under tmux/screen and older
+// terminals.
+func osc8Link(text, url string) string {
+	return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07"
 }

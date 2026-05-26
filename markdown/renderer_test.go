@@ -135,3 +135,41 @@ func TestRender_TablePassthrough(t *testing.T) {
 		t.Errorf("table separator should be stripped: %q", visible)
 	}
 }
+
+func TestRender_Link_OSC8(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	out := r.Render("see [docs](https://example.com)", 0)
+	if !strings.Contains(out, "\x1b]8;;https://example.com\x07") {
+		t.Errorf("OSC 8 opening missing: %q", out)
+	}
+	if !strings.Contains(out, "\x1b]8;;\x07") {
+		t.Errorf("OSC 8 closing missing: %q", out)
+	}
+	if visible := ansi.Strip(out); !strings.Contains(visible, "docs") {
+		t.Errorf("link text missing from visible output: %q", visible)
+	}
+}
+
+// Visible line "see docs and more text here" is 27 cells. maxWidth=10
+// forces the OSC 8 fallback for the whole line.
+func TestRender_Link_PlainFallback_OnNarrowWidth(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	out := r.Render("see [docs](https://example.com) and more text here", 10)
+	if strings.Contains(out, "\x1b]8;;") {
+		t.Errorf("OSC 8 should be absent on overflowing line: %q", out)
+	}
+	if !strings.Contains(ansi.Strip(out), "docs") {
+		t.Errorf("link text missing: %q", out)
+	}
+}
+
+// A long URL with short visible text must NOT trigger fallback —
+// OSC escape bytes are zero-width.
+func TestRender_Link_LongURLDoesNotTriggerFallback(t *testing.T) {
+	r := NewRenderer(DefaultStyles())
+	longURL := "https://example.com/" + strings.Repeat("a", 500)
+	out := r.Render("[x]("+longURL+")", 80)
+	if !strings.Contains(out, "\x1b]8;;"+longURL+"\x07") {
+		t.Errorf("OSC 8 should be emitted for short visible text regardless of URL length")
+	}
+}
