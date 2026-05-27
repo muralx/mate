@@ -433,6 +433,31 @@ func DefaultScrollableTextStyles() ScrollableTextStyles
 | Update | `func(msg tea.KeyMsg) (tea.Cmd, bool)` |
 | View | `func() string` |
 
+#### MarkdownTextArea
+
+Extends `ScrollableText` with Markdown rendering. The renderer lives in package [`markdown`](#package-markdown).
+
+```go
+func NewMarkdownTextArea(id string, styles MarkdownTextAreaStyles) *MarkdownTextArea
+func DefaultMarkdownTextAreaStyles() MarkdownTextAreaStyles
+```
+
+| Method | Signature |
+|--------|-----------|
+| SetMarkdown | `func(md string)` |
+| Markdown | `func() string` |
+| SetStyles | `func(s MarkdownTextAreaStyles)` |
+| SetContent | `func(s string)` (override — routes to `SetMarkdown`) |
+
+Inherits all `ScrollableText` methods.
+
+```go
+type MarkdownTextAreaStyles struct {
+    Scroll   ScrollableTextStyles
+    Markdown markdown.Styles
+}
+```
+
 #### TabComponent
 
 A container that manages tab switching using TCB layout internally: TabBar header at the top, active tab content filling remaining height.
@@ -451,6 +476,42 @@ func NewTabComponent(id string, styles TabBarStyles) *TabComponent
 | View | `func() string` |
 
 Embeds `BaseContainer`. Inherits: `AddChild`, `Children`, `InnerFocused`.
+
+---
+
+## Package `markdown`
+
+A standalone markdown→ANSI renderer used by `widget.MarkdownTextArea`. Pure function over the markdown string — no UI dependencies, no I/O.
+
+#### Renderer
+
+```go
+func NewRenderer(styles Styles) *Renderer
+```
+
+| Method | Signature |
+|--------|-----------|
+| Render | `func(md string, maxWidth int) string` |
+
+`maxWidth > 0` triggers a per-line OSC 8 hyperlink fallback to plain styled text when the line's visible width would exceed `maxWidth`. Pass `0` to always emit OSC 8 (no fallback).
+
+#### Styles
+
+```go
+type Styles struct {
+    H1, H2, H3 lipgloss.Style
+    Bold       lipgloss.Style
+    Code       lipgloss.Style
+    CodeBlock  lipgloss.Style
+    Link       lipgloss.Style
+}
+
+func DefaultStyles() Styles
+```
+
+#### Supported Markdown
+
+H1/H2/H3 headings, `**bold**`, inline `` `code` ``, fenced code blocks, horizontal rules (`---`, `***`, `___`), table rows (passthrough, separator stripped), and `[text](url)` links as OSC 8 hyperlinks. Out of scope: lists, blockquotes, italics, images, escapes.
 
 ---
 

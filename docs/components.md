@@ -597,3 +597,76 @@ type ScrollableTextStyles struct {
 ### Mouse
 
 Mouse wheel scrolling moves the viewport up/down by 3 lines per scroll tick. The component does not need keyboard focus to receive scroll events — scrolling targets the component under the cursor.
+
+---
+
+## MarkdownTextArea
+
+A focusable, scrollable component that renders a small subset of Markdown as ANSI-styled terminal text. Extends `ScrollableText` — inherits all of its scroll keys, mouse wheel handling, and focus behavior.
+
+Supported markdown: H1/H2/H3 headings, `**bold**`, inline `` `code` ``, fenced code blocks, horizontal rules (`---`, `***`, `___`), table rows (passthrough), and `[text](url)` links (rendered as OSC 8 hyperlinks with a plain-styled fallback for narrow viewports). Not supported: lists, blockquotes, italics, images, escapes.
+
+```go
+mt := widget.NewMarkdownTextArea("docs", widget.DefaultMarkdownTextAreaStyles())
+mt.SetPreferredWidth(80)
+mt.SetPreferredHeight(20)
+mt.SetMarkdown("# Title\n\nSome **bold** text and a [link](https://example.com).")
+```
+
+### Constructor
+
+```go
+func NewMarkdownTextArea(id string, styles MarkdownTextAreaStyles) *MarkdownTextArea
+func DefaultMarkdownTextAreaStyles() MarkdownTextAreaStyles
+```
+
+### MarkdownTextAreaStyles
+
+```go
+type MarkdownTextAreaStyles struct {
+    Scroll   ScrollableTextStyles  // viewport styles (inactive/focused)
+    Markdown markdown.Styles        // per-element markdown styles
+}
+```
+
+The markdown styles live in the sibling `markdown` package:
+
+```go
+type markdown.Styles struct {
+    H1, H2, H3, Bold, Code, CodeBlock, Link lipgloss.Style
+}
+```
+
+Override individual styles by copying from `DefaultMarkdownTextAreaStyles()`:
+
+```go
+s := widget.DefaultMarkdownTextAreaStyles()
+s.Markdown.H1 = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffd54f"))
+mt := widget.NewMarkdownTextArea("docs", s)
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `SetMarkdown(md string)` | Replace the markdown source and re-render |
+| `Markdown() string` | Get the markdown source (use `Content()` for the rendered ANSI) |
+| `SetStyles(s MarkdownTextAreaStyles)` | Swap styles and re-render |
+| `SetContent(s string)` | Override of `ScrollableText.SetContent` that routes through `SetMarkdown` |
+
+Inherits all `ScrollableText` methods (`SetWrap`, `ScrollTo`, `ScrollTop`, etc.) and all of its keyboard, mouse, and focus behavior.
+
+### OSC 8 Hyperlinks
+
+Links are emitted as OSC 8 terminal hyperlinks by default. When a line's visible width would exceed the viewport, links on that line fall back to plain styled text — OSC 8 across wrapped lines is fragile in some terminal emulators. Modern terminals (kitty, WezTerm, iTerm2) render OSC 8 links as clickable.
+
+### Renderer Re-Use
+
+The markdown renderer is a pure markdown→ANSI function in the `markdown` package. It can be used standalone — for example, to render markdown into a string for printing or for use in a custom component:
+
+```go
+import "github.com/muralx/mate/markdown"
+
+r := markdown.NewRenderer(markdown.DefaultStyles())
+ansi := r.Render("# Hello\n\n**bold**", 80) // 80 = viewport width for OSC 8 fallback
+```

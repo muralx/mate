@@ -30,10 +30,10 @@ go vet ./...
 
 ## Architecture
 
-Three packages with clear responsibilities:
+Four packages with clear responsibilities:
 
 **`widget/`** — UI components implementing the `Component` interface defined in `component.go`:
-- `BaseComponent` → `FocusableComponent` → leaf widgets (Button, TextInput, Checkbox, Toggle, TabBar, Table, ScrollableText, FormattedTextInput)
+- `BaseComponent` → `FocusableComponent` → leaf widgets (Button, TextInput, Checkbox, Toggle, TabBar, Table, ScrollableText, MarkdownTextArea, FormattedTextInput)
 - `BaseComponent` → `BaseContainer` → container widgets (Panel, TabComponent, Field, Card, Text)
 - `Panel` is the universal container with configurable layout: `Vertical` (stack top-to-bottom), `Horizontal` (stack left-to-right), or `TCB` (Top-Center-Bottom, center flexes)
 - Children are added with `Add(child, Position)` using `Next`, `TCBTop`, `TCBCenter`, `TCBBottom`
@@ -45,6 +45,11 @@ Three packages with clear responsibilities:
 **`input/`** — Focus and key binding management:
 - `FocusManager` walks the component tree to find focusable leaves, handles Tab/Shift-Tab cycling, click-to-focus via hit testing, and ID-based focus
 - `KeyBindingResolver` resolves global key bindings by walking the component tree
+
+**`markdown/`** — Standalone markdown→ANSI renderer:
+- Pure function: `markdown.Render(md, maxWidth) string`. No UI dependencies.
+- Used by `widget.MarkdownTextArea` but reusable on its own (e.g., rendering markdown to a string).
+- Supports a small subset: H1/H2/H3, bold, inline code, code blocks, HR, table passthrough, OSC 8 links.
 
 **`window/`** — Screen-level management:
 - `BaseWindow` provides shared container + event routing (keyboard, mouse, focus cycling)

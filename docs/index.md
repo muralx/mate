@@ -5,7 +5,7 @@ Mate is a Go component framework for building terminal user interfaces on top of
 ## Documentation
 
 1. **[Getting Started](getting-started.md)** — Installation, first application, core concepts
-2. **[Components](components.md)** — All available widgets: Button, TextInput, Toggle, CheckboxList, TabComponent, Table, ScrollableText, Card, Text, Field
+2. **[Components](components.md)** — All available widgets: Button, TextInput, Toggle, CheckboxList, TabComponent, Table, ScrollableText, MarkdownTextArea, Card, Text, Field
 3. **[Layout](layout.md)** — Panel layouts (Vertical, Horizontal, TCB), preferred sizes, fields, custom containers
 4. **[Focus and Keyboard](focus-and-keyboard.md)** — Focus cycling, key bindings, global shortcuts, key event flow
 5. **[Mouse](mouse.md)** — Hit testing, click-to-focus, mouse event handling
@@ -37,11 +37,12 @@ Mate is a Go component framework for building terminal user interfaces on top of
 └─────────────────────────────────────────────┘
 ```
 
-Three packages with clear responsibilities:
+Four packages with clear responsibilities:
 
 - **`widget/`** — Components, containers, layouts, and the `Component` interface
 - **`input/`** — Focus management and key binding resolution
 - **`window/`** — Screen management, popup stack, overlay rendering
+- **`markdown/`** — Standalone markdown→ANSI renderer used by `MarkdownTextArea` (and usable on its own)
 
 ## Quick Example
 
