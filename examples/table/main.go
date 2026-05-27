@@ -19,7 +19,10 @@ import (
 func main() {
 	win := window.NewWindow("table")
 
-	panel := widget.NewPanel("panel")
+	// Panel uses TCB so the Table in the center slot flexes to fill
+	// all available height. Default Vertical layout would collapse
+	// it to its preferred (≈1 line) height.
+	panel := widget.NewPanel("panel", widget.TCB)
 	panel.SetBorder(widget.DefaultBorder())
 	panel.SetTitle(" Log viewer ")
 
@@ -37,14 +40,21 @@ func main() {
 		{"12:00:05", "INFO", "Reconnected"},
 	})
 
+	status := widget.NewText("status", " Click or press Enter on a row.", lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")))
+
 	table := widget.NewTable("logs", columns, ds, widget.DefaultTableStyles())
 	table.OnRowClick(func(row int) tea.Cmd {
-		fmt.Println("Clicked row", row)
+		status.SetText(fmt.Sprintf(" Selected row %d — %s %s: %s",
+			row,
+			ds.CellData(row, 0),
+			ds.CellData(row, 1),
+			ds.CellData(row, 2)))
 		return nil
 	})
-	panel.Add(table, widget.Next)
+	panel.Add(table, widget.TCBCenter)
 
 	win.Add(panel, widget.TCBCenter)
+	win.Add(status, widget.TCBBottom)
 
 	win.OnKeyPress(func(msg tea.KeyMsg) tea.Cmd {
 		if msg.String() == "ctrl+q" {

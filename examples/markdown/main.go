@@ -51,13 +51,16 @@ Press Ctrl+Q to quit.
 func main() {
 	win := window.NewWindow("markdown")
 
-	panel := widget.NewPanel("panel")
+	// Panel uses TCB so the MarkdownTextArea in the center slot flexes
+	// to fill all available height. Default Vertical layout would
+	// collapse it to its preferred (≈1 line) height.
+	panel := widget.NewPanel("panel", widget.TCB)
 	panel.SetBorder(widget.DefaultBorder())
 	panel.SetTitle(" Markdown Viewer ")
 
 	mt := widget.NewMarkdownTextArea("md", widget.DefaultMarkdownTextAreaStyles())
 	mt.SetMarkdown(content)
-	panel.Add(mt, widget.Next)
+	panel.Add(mt, widget.TCBCenter)
 
 	win.Add(panel, widget.TCBCenter)
 
