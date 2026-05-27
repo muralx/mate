@@ -87,6 +87,20 @@ Mate takes a different approach. Instead of writing Update and View functions, y
 
 You don't need to understand the Elm Architecture to use Mate. If you're coming from Bubble Tea and want to keep writing raw Update/View, Mate might not be for you — it's designed for apps that want a higher-level component model.
 
+## How Mate Compares to Other Go TUI Options
+
+Mate isn't the only choice in this space. Here's an honest take on when each option fits:
+
+| You want | Try |
+|---|---|
+| The lowest-level building blocks, full control of Update/View, the Bubble Tea ecosystem (Bubbles, Lipgloss) | **[Bubble Tea](https://github.com/charmbracelet/bubbletea)** directly |
+| A higher-level component framework built **on Bubble Tea**, with composition and callbacks instead of message routing | **Mate** (you're here) |
+| A mature batteries-included TUI library not tied to the Elm Architecture, with a long-established widget set and a different (imperative, event-handler) style | **[tview](https://github.com/rivo/tview)** |
+| A minimal, low-level library for absolute terminal control | **[gocui](https://github.com/awesome-gocui/gocui)** |
+| Dashboard-style data visualization (gauges, bar charts, sparklines) | **[termui](https://github.com/gizak/termui)** |
+
+Mate sits one layer above Bubble Tea, sharing its ecosystem (Lipgloss styling, Bubbles components like `textinput`, the `tea.Cmd` side-effects model). If you like Bubble Tea but find the message routing repetitive in larger apps, Mate is built for that. If you want a TUI library without the Elm Architecture at all, tview is the more established choice.
+
 ## Architecture
 
 ```
@@ -107,11 +121,12 @@ You don't need to understand the Elm Architecture to use Mate. If you're coming 
 └─────────────────────────────────────────────┘
 ```
 
-Three packages:
+Four packages:
 
 - **`widget/`** — Components, containers, layouts, and the `Component` interface
 - **`input/`** — Focus management and key binding resolution
 - **`window/`** — Windows, popups, and the Bubble Tea adapter
+- **`markdown/`** — Standalone markdown→ANSI renderer used by `MarkdownTextArea`
 
 ## Documentation
 
