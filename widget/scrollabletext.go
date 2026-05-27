@@ -237,21 +237,25 @@ func (st *ScrollableText) View() string {
 		visible = truncated
 	}
 
+	// Pad each line to st.width manually rather than letting lipgloss
+	// do it via Style.Width(w): lipgloss's width path goes through
+	// muesli/reflow's wordwrap, which miscounts cells on per-grapheme
+	// SGR sequences and re-wraps content already wrapped by ansi.Wrap.
+	if st.width > 0 {
+		padded := make([]string, len(visible))
+		for i, line := range visible {
+			padded[i] = ansiPadRight(line, st.width)
+		}
+		visible = padded
+	}
+
 	content := strings.Join(visible, "\n")
 
 	if !st.Active() {
 		// Strip inner ANSI so the Faint(true) treatment actually applies —
 		// inner SGR codes would otherwise override the faint style.
-		// Width() is intentionally omitted: lipgloss's width-based reflow
-		// miscounts per-grapheme SGR escapes and re-wraps content already
-		// wrapped by ansi.Wrap in getLines. Right-padding for short lines
-		// is pending — see follow-up.
 		return lipgloss.NewStyle().Faint(true).Height(st.height).Render(ansi.Strip(content))
 	}
 
-	// Width() is intentionally omitted: lipgloss's width-based reflow
-	// miscounts per-grapheme SGR escapes and re-wraps content already
-	// wrapped by ansi.Wrap in getLines. Right-padding for short lines
-	// is pending — see follow-up.
 	return style.Height(st.height).Render(content)
 }
