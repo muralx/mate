@@ -242,8 +242,16 @@ func (st *ScrollableText) View() string {
 	if !st.Active() {
 		// Strip inner ANSI so the Faint(true) treatment actually applies —
 		// inner SGR codes would otherwise override the faint style.
-		return lipgloss.NewStyle().Faint(true).Width(st.width).Height(st.height).Render(ansi.Strip(content))
+		// Width() is intentionally omitted: lipgloss's width-based reflow
+		// miscounts per-grapheme SGR escapes and re-wraps content already
+		// wrapped by ansi.Wrap in getLines. Right-padding for short lines
+		// is pending — see follow-up.
+		return lipgloss.NewStyle().Faint(true).Height(st.height).Render(ansi.Strip(content))
 	}
 
-	return style.Width(st.width).Height(st.height).Render(content)
+	// Width() is intentionally omitted: lipgloss's width-based reflow
+	// miscounts per-grapheme SGR escapes and re-wraps content already
+	// wrapped by ansi.Wrap in getLines. Right-padding for short lines
+	// is pending — see follow-up.
+	return style.Height(st.height).Render(content)
 }
